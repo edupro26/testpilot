@@ -4,7 +4,7 @@ This project is a proof of concept with the objective of exploring and designing
 
 ## Application Architecture (Prototype)
 
-![Structure](./docs/app_structure.png)
+![Structure](./images/app_structure.png)
 
 > **Note**: The diagram above labels the Level 1 module "Restructurer". This document and the codebase standardize on **Structurer** instead.
 
@@ -86,14 +86,14 @@ For each module (url) inside the JSON test case:
 
 ### Functional
 1. Accept a markdown test-case specification file as CLI input.
-2. Structurer converts the markdown into the Level 1 JSON  via an LLM call.
+2. Structurer converts the markdown into the Level 1 JSON via an LLM call.
 3. For each module URL, the Crawler retrieves page content via Crawl4AI, restricted to publicly accessible, non-authenticated pages.
-4. Extractor selects, per execution step, the UI elements needed  via an LLM call.
+4. Extractor selects, per execution step, the UI elements needed via an LLM call.
 5. Validator checks each extracted identifier against the crawled content via an LLM call before it's accepted into the Level 2 output.
 6. Generator turns the validated Level 2 JSON into a single executable Robot Framework script using Browser Library keywords.
 7. The CLI exposes a `--framework` flag; only `robot` is functional in this PoC (`playwright`/`cypress` remain documented, not implemented).
 8. The pipeline persists the Level 1 JSON, Level 2 JSON, and the generated script as separate, inspectable files per run.
-9. The LLM provider is selectable via `LLM_PROVIDER` (`anthropic`/`openai`/`azure_openai`); `azure_openai` is fully functional for this PoC, the others are stubs.
+9. The LLM provider is selectable via `LLM_PROVIDER` (`mock`/`anthropic`/`openai`/`azure_openai`); `azure_openai` is fully functional for this PoC, `mock` is available for offline development/testing, and `anthropic`/`openai` are stubs.
 10. On a validator failure, the pipeline retries extraction once with feedback, then aborts with a clear error.
 
 ### Non-functional
@@ -105,7 +105,7 @@ For each module (url) inside the JSON test case:
 6. Generated Robot Framework scripts must parse cleanly (`robot --dryrun`) for the demoed example(s).
 7. Each pipeline stage is independently unit-testable via a mock LLM provider, with no live network/LLM calls required.
 8. Logging uses the standard `logging` module (not `print`), level controlled by `LOG_LEVEL`, with clear per-stage log lines.
-9. Single-user local CLI tool; no persistence layer, or multi-tenant concerns in scope.
+9. Single-user local CLI tool; no persistence layer or multi-tenant concerns in scope.
 10. Script execution, test-report generation, and non-Robot-Framework generators are explicitly out of scope for this PoC (future roadmap items only).
 
 ### Supported Test Frameworks
