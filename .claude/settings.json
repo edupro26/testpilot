@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv *)",
+      "Bash(ruff *)",
+      "Bash(pytest *)"
+    ],
+    "ask": [
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(rm *)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(./secrets/**)"
+    ],
+    "disableBypassPermissionsMode": "disable"
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import json,sys,re; d=json.load(sys.stdin); c=(d.get('tool_input') or {}).get('command','') or ''; deny = re.search(r'\\bpip[0-9.]*\\s+install\\b', c) and not re.search(r'\\buv\\s+pip[0-9.]*\\s+install\\b', c); print(json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'deny','permissionDecisionReason':'This project is uv-only per AGENTS.md - use uv add / uv pip install instead of bare pip.'}})) if deny else print('{}')\"",
+            "statusMessage": "Checking for pip usage..."
+          }
+        ]
+      }
+    ]
+  }
+}
