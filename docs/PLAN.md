@@ -144,19 +144,21 @@ src/
 |   └── extracted_data.py           # Level 2: ExtractedData, ExecutionStepWithData,
 |                                     ModuleWithData, TestCaseWithData
 ├── prompts/                        # one template per pipeline stage
-|   ├── structurer.md
-|   ├── extractor.md
-|   ├── validator.md
-|   └── generator_robot.md
+|   ├── __init__.py
+|   ├── loader.py                   # load_prompt / render_prompt
+|   └── templates/
+|       ├── structurer.md
+|       ├── extractor.md
+|       ├── validator.md
+|       └── generator_robot.md
 ├── structurer/                     # Level 1
 |   └── service.py
 ├── validator/                      # Level 2
 |   ├── service.py
 |   └── models.py                   # ValidationResult
 ├── cli.py                          # typer app: `generate-script` command
-├── config.py                       # pydantic-settings Settings, reads .env
+├── config.py                       # pydantic-settings Settings + configure_logging()
 ├── exceptions.py                   # PipelineError + per-stage subclasses
-├── logging_config.py               # logging setup, reads LOG_LEVEL
 ├── main.py                         # CLI entrypoint wiring
 └── pipeline.py                     # orchestrator: Level1 -> Level2 (per-module loop) -> Level3
 test/                               # pytest suite mirroring the modules above
@@ -164,9 +166,9 @@ test/                               # pytest suite mirroring the modules above
 
 ## Roadmap
 
-- **M0 — Scaffolding**: dependencies added to `pyproject.toml` (`pydantic`, `pydantic-settings`, `python-dotenv`, `openai`, `crawl4ai`, `typer`; dev: `pytest`, `pytest-mock`, `robotframework`, `robotframework-browser`), `config.py`/`logging_config.py`, prompt loader + four template stub files, test scaffolding, `.gitignore` update for `output/`.
-- **M1 — Structurer (Level 1) against Azure OpenAI**: LLM provider abstraction, Level 1 models, Structurer service + prompt. Demo: run against `LLM_PROVIDER=mock` (offline) and `LLM_PROVIDER=azure_openai` (real), both produce valid Level 1 JSON.
-- **M2 — Crawler + Extractor + Validator (Level 2)**: Crawl4AI wrapper, Level 2 models, Extractor + Validator services and prompts. Demo: Level 1 -> Level 2 against a real public page, producing real extracted and validated element locators.
-- **M3 — Generator (Level 3, Robot Framework)**: Generator service + prompt targeting Browser Library keywords. Demo: a hand-authored Level 2 JSON fixture produces a `.robot` file that passes `robot --dryrun`.
-- **M4 — CLI + end-to-end wiring**: `pipeline.py`, `cli.py`, `generate-script` entry point, a worked example under `examples/`. Demo: one CLI run against a real page, fully live (Azure OpenAI + Crawl4AI), producing a script the reviewer runs manually with `robot`.
-- **M5 (stretch, future)**: script execution + report ingestion, Playwright/Cypress generators, authenticated-page support, optional integration test suite.
+- [x] **M0 — Scaffolding**: dependencies added to `pyproject.toml` (`pydantic`, `pydantic-settings`, `python-dotenv`, `openai`, `crawl4ai`, `typer`; dev: `pytest`, `pytest-mock`, `robotframework`, `robotframework-browser`), `config.py` (incl. logging setup), prompt loader + structurer template stub (the other stages' templates are added per-milestone as each service is built), test scaffolding, `.gitignore` update for `output/`.
+- [ ]  **M1 — Structurer (Level 1) against Azure OpenAI**: LLM provider abstraction, Level 1 models, Structurer service + prompt. Demo: run against `LLM_PROVIDER=mock` (offline) and `LLM_PROVIDER=azure_openai` (real), both produce valid Level 1 JSON.
+- [ ] **M2 — Crawler + Extractor + Validator (Level 2)**: Crawl4AI wrapper, Level 2 models, Extractor + Validator services and prompts. Demo: Level 1 -> Level 2 against a real public page, producing real extracted and validated element locators.
+- [ ] **M3 — Generator (Level 3, Robot Framework)**: Generator service + prompt targeting Browser Library keywords. Demo: a hand-authored Level 2 JSON fixture produces a `.robot` file that passes `robot --dryrun`.
+- [ ] **M4 — CLI + end-to-end wiring**: `pipeline.py`, `cli.py`, `generate-script` entry point, a worked example under `examples/`. Demo: one CLI run against a real page, fully live (Azure OpenAI + Crawl4AI), producing a script the reviewer runs manually with `robot`.
+- [ ] **M5 (stretch, future)**: script execution + report ingestion, Playwright/Cypress generators, authenticated-page support, optional integration test suite.
