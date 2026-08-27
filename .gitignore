@@ -77,3 +77,6 @@ dmypy.json
 
 # Ruff
 .ruff_cache/
+
+# Generated pipeline artifacts
+output/
