@@ -79,7 +79,6 @@ select = [
     "SIM",
     "ANN",
     "RUF",
-    "SIM",
     "ARG",
     "PTH",
     "RET",
