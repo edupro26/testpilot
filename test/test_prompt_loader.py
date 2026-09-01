@@ -1,7 +1,7 @@
-"""Tests for src.prompts.loader."""
+"""Tests for src.prompt_loader."""
 
 import pytest
-from src.prompts.loader import load_prompt, render_prompt
+from src.prompt_loader import load_prompt, render_prompt
 
 
 def test_load_prompt_reads_template() -> None:

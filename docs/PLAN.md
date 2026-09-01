@@ -121,8 +121,14 @@ For each module (url) inside the JSON test case:
 docs/
 ├── images/                         # images for documentation
 └── PLAN.md                         # Project Planning and roadmap
-examples/                           # sample test-case markdown inputs for demos
 output/                             # gitignored, per-run generated artifacts (JSON + script)
+resources/
+├── examples/                       # sample test-case markdown inputs for demos
+└── prompts/                        # one template per pipeline stage
+|   ├── structurer.md
+|   ├── extractor.md
+|   ├── validator.md
+|   └── generator_robot.md
 src/
 ├── crawler/                        # Level 2 (Crawl4AI wrapper)
 |   ├── service.py
@@ -146,14 +152,6 @@ src/
 |   ├── test_case.py                # 
 |   └── extracted_data.py           # Level 2: ExtractedData, ExecutionStepWithData,
 |                                     ModuleWithData, TestCaseWithData
-├── prompts/                        # one template per pipeline stage
-|   ├── __init__.py
-|   ├── loader.py                   # load_prompt / render_prompt
-|   └── templates/
-|       ├── structurer.md
-|       ├── extractor.md
-|       ├── validator.md
-|       └── generator_robot.md
 ├── structurer/                     # Level 1
 |   └── service.py
 ├── validator/                      # Level 2
@@ -163,7 +161,8 @@ src/
 ├── config.py                       # pydantic-settings Settings + configure_logging()
 ├── exceptions.py                   # PipelineError + per-stage subclasses
 ├── main.py                         # CLI entrypoint wiring
-└── pipeline.py                     # orchestrator: Level1 -> Level2 (per-module loop) -> Level3
+├── pipeline.py                     # orchestrator: Level1 -> Level2 (per-module loop) -> Level3
+└── prompt_loader.py                # load_prompt / render_prompt
 test/                               # pytest suite mirroring the modules above
 ```
 

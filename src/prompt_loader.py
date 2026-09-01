@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-_PROMPTS_DIR = Path(__file__).parent / "templates"
+_PROMPTS_DIR = Path(__file__).parent.parent / "resources" / "prompts"
 
 
 def load_prompt(name: str) -> str:
