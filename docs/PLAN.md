@@ -93,7 +93,7 @@ For each module (url) inside the JSON test case:
 6. Generator turns the validated Level 2 JSON into a single executable Robot Framework script using Browser Library keywords.
 7. The CLI exposes a `--framework` flag; only `robot` is functional in this PoC (`playwright`/`cypress` remain documented, not implemented).
 8. The pipeline persists the Level 1 JSON, Level 2 JSON, and the generated script as separate, inspectable files per run.
-9. The LLM provider is selectable via `LLM_PROVIDER` (`mock`/`anthropic`/`openai`/`azure_openai`); `azure_openai` is fully functional for this PoC, `mock` is available for offline development/testing, and `anthropic`/`openai` are stubs.
+9. The LLM provider is selectable via `LLM_PROVIDER` (`mock`/`anthropic`/`openai`/`azure_openai`); all four are implemented, though only `azure_openai` (this PoC's primary target) and `mock` (offline development/testing) have been exercised against a real endpoint so far — `anthropic`/`openai` are implemented and unit-tested but not yet run against real credentials.
 10. On a validator failure, the pipeline retries extraction once with feedback, then aborts with a clear error.
 
 ### Non-functional
@@ -134,10 +134,13 @@ src/
 |   └── frameworks.py               # TestFramework -> prompt template registry
 |                                     (robot only, for now)
 ├── llm/                            # LLM provider abstraction
-|   ├── base.py                     # LLMProvider protocol
+|   ├── protocol.py                 # LLMProvider protocol
 |   ├── factory.py                  # get_llm_provider(settings)
-|   ├── mock_provider.py
-|   └── azure_openai_provider.py
+|   └── provider/                   # concrete LLMProvider implementations
+|       ├── mock.py
+|       ├── azure_openai.py
+|       ├── openai.py
+|       └── anthropic.py
 ├── model/                          # shared JSON-contract schemas (cross-stage)
 |   ├── enums.py                    # ElementType, IdentifierType, TestFramework
 |   ├── test_case.py                # 
