@@ -84,7 +84,7 @@ CASES = [
         configure_response=_configure_openai_style,
         call_kwargs=_openai_style_kwargs,
         used_json_mode=_openai_style_used_json_mode,
-        missing_settings_match="Missing required Azure OpenAI settings",
+        missing_settings_match="Missing required AZURE_OPENAI_ENDPOINT",
     ),
     ProviderCase(
         name="openai",
@@ -94,7 +94,7 @@ CASES = [
         configure_response=_configure_openai_style,
         call_kwargs=_openai_style_kwargs,
         used_json_mode=_openai_style_used_json_mode,
-        missing_settings_match="Missing required OpenAI settings",
+        missing_settings_match="Missing required OPENAI_API_KEY",
     ),
     ProviderCase(
         name="anthropic",
@@ -104,7 +104,7 @@ CASES = [
         configure_response=_configure_anthropic,
         call_kwargs=_anthropic_kwargs,
         used_json_mode=_anthropic_used_json_mode,
-        missing_settings_match="Missing required Anthropic settings",
+        missing_settings_match="Missing required ANTHROPIC_API_KEY",
     ),
 ]
 

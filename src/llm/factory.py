@@ -1,6 +1,7 @@
 """LLM provider selection."""
 
 from src.config import LLMProviderName, Settings
+from src.exceptions import ConfigurationError
 from src.llm.protocol import LLMProvider
 from src.llm.provider.anthropic import AnthropicProvider
 from src.llm.provider.azure_openai import AzureOpenAIProvider
@@ -18,8 +19,9 @@ def get_llm_provider(settings: Settings) -> LLMProvider:
         The selected LLMProvider implementation.
 
     Raises:
-        ValueError: If llm_provider does not name one of the supported
-            providers.
+        ConfigurationError: If llm_provider does not name one of the
+            supported providers, or the selected provider is missing
+            required settings.
     """
     match settings.llm_provider:
         case LLMProviderName.MOCK:
@@ -31,4 +33,4 @@ def get_llm_provider(settings: Settings) -> LLMProvider:
         case LLMProviderName.ANTHROPIC:
             return AnthropicProvider(settings)
         case _:
-            raise ValueError(f"{settings.llm_provider} is not supported")
+            raise ConfigurationError(f"{settings.llm_provider} is not supported")

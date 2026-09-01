@@ -1,4 +1,4 @@
-"""Shared pipeline exceptions."""
+"""Shared application exceptions."""
 
 
 class PipelineError(Exception):
@@ -7,3 +7,7 @@ class PipelineError(Exception):
 
 class StructurerError(PipelineError):
     """Raised when the Structurer cannot produce a valid TestCase."""
+
+
+class ConfigurationError(ValueError):
+    """Raised when required application configuration is missing or invalid."""

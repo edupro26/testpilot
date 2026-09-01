@@ -38,7 +38,7 @@ def test_get_llm_provider_azure_openai_missing_config_raises(
     """LLM_PROVIDER=azure_openai without credentials raises ValueError."""
     monkeypatch.setenv("LLM_PROVIDER", "azure_openai")
 
-    with pytest.raises(ValueError, match="Missing required Azure OpenAI settings"):
+    with pytest.raises(ValueError, match="Missing required AZURE_OPENAI_ENDPOINT"):
         get_llm_provider(Settings())
 
 
@@ -61,7 +61,7 @@ def test_get_llm_provider_openai_missing_config_raises(
     """LLM_PROVIDER=openai without credentials raises ValueError."""
     monkeypatch.setenv("LLM_PROVIDER", "openai")
 
-    with pytest.raises(ValueError, match="Missing required OpenAI settings"):
+    with pytest.raises(ValueError, match="Missing required OPENAI_API_KEY"):
         get_llm_provider(Settings())
 
 
@@ -84,5 +84,5 @@ def test_get_llm_provider_anthropic_missing_config_raises(
     """LLM_PROVIDER=anthropic without credentials raises ValueError."""
     monkeypatch.setenv("LLM_PROVIDER", "anthropic")
 
-    with pytest.raises(ValueError, match="Missing required Anthropic settings"):
+    with pytest.raises(ValueError, match="Missing required ANTHROPIC_API_KEY"):
         get_llm_provider(Settings())

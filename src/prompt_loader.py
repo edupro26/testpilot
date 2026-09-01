@@ -13,6 +13,9 @@ def load_prompt(name: str) -> str:
 
     Returns:
         The raw template text.
+
+    Raises:
+        FileNotFoundError: If no template named `name` exists.
     """
     return (_PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8")
 
@@ -26,5 +29,8 @@ def render_prompt(name: str, **kwargs: str) -> str:
 
     Returns:
         The rendered prompt text.
+
+    Raises:
+        FileNotFoundError: If no template named `name` exists.
     """
     return load_prompt(name).format(**kwargs)

@@ -1,10 +1,14 @@
 """OpenAI-backed LLM provider."""
 
+import logging
 from typing import Any
 
 from openai import OpenAI
 
 from src.config import Settings
+from src.exceptions import ConfigurationError
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider:
@@ -17,7 +21,7 @@ class OpenAIProvider:
             settings: Application settings containing OpenAI credentials.
 
         Raises:
-            ValueError: If required OpenAI settings are missing.
+            ConfigurationError: If required OpenAI settings are missing.
         """
         self._require_settings(
             {
@@ -32,6 +36,11 @@ class OpenAIProvider:
         self, *, system_prompt: str, user_prompt: str, json_mode: bool = False
     ) -> str:
         """Return the model's completion for the given prompt pair."""
+        logger.info(
+            "Requesting completion from OpenAI (model=%s, json_mode=%s)",
+            self._model,
+            json_mode,
+        )
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": [
@@ -47,14 +56,14 @@ class OpenAIProvider:
 
     @staticmethod
     def _require_settings(required: dict[str, str | None]) -> None:
-        """Raise ValueError listing any of `required` that are missing.
+        """Raise ConfigurationError listing any of `required` that are missing.
 
         Args:
             required: Mapping of env var name to its resolved value.
 
         Raises:
-            ValueError: If any value in `required` is falsy.
+            ConfigurationError: If any value in `required` is falsy.
         """
         missing = [name for name, value in required.items() if not value]
         if missing:
-            raise ValueError(f"Missing required OpenAI settings: {', '.join(missing)}")
+            raise ConfigurationError(f"Missing required {', '.join(missing)}")
