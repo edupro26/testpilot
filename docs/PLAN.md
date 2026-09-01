@@ -24,7 +24,7 @@ This project is a proof of concept with the objective of exploring and designing
 "modules": [
     {
         "url": "...",
-        "purpose": "...",
+        "description": "...",
         "execution_steps": [
             {
             "step": "...",
@@ -55,7 +55,7 @@ For each module (url) inside the JSON test case:
 "modules": [
     {
         "url": "...",
-        "purpose": "...",
+        "description": "...",
         "execution_steps": [
             {
                 "step": "...",
@@ -169,7 +169,7 @@ test/                               # pytest suite mirroring the modules above
 ## Roadmap
 
 - [x] **M0 — Scaffolding**: dependencies added to `pyproject.toml` (`pydantic`, `pydantic-settings`, `python-dotenv`, `openai`, `crawl4ai`, `typer`; dev: `pytest`, `pytest-mock`, `robotframework`, `robotframework-browser`), `config.py` (incl. logging setup), prompt loader + structurer template stub (the other stages' templates are added per-milestone as each service is built), test scaffolding, `.gitignore` update for `output/`.
-- [ ]  **M1 — Structurer (Level 1) against Azure OpenAI**: LLM provider abstraction, Level 1 models, Structurer service + prompt. Demo: run against `LLM_PROVIDER=mock` (offline) and `LLM_PROVIDER=azure_openai` (real), both produce valid Level 1 JSON.
+- [x]  **M1 — Structurer (Level 1) against Azure OpenAI**: LLM provider abstraction, Level 1 models, Structurer service + prompt. Demo: run against `LLM_PROVIDER=mock` (offline) and `LLM_PROVIDER=azure_openai` (real), both produce valid Level 1 JSON.
 - [ ] **M2 — Crawler + Extractor + Validator (Level 2)**: Crawl4AI wrapper, Level 2 models, Extractor + Validator services and prompts. Demo: Level 1 -> Level 2 against a real public page, producing real extracted and validated element locators.
 - [ ] **M3 — Generator (Level 3, Robot Framework)**: Generator service + prompt targeting Browser Library keywords. Demo: a hand-authored Level 2 JSON fixture produces a `.robot` file that passes `robot --dryrun`.
 - [ ] **M4 — CLI + end-to-end wiring**: `pipeline.py`, `cli.py`, `generate-script` entry point, a worked example under `examples/`. Demo: one CLI run against a real page, fully live (Azure OpenAI + Crawl4AI), producing a script the reviewer runs manually with `robot`.

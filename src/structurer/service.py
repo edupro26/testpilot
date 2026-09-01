@@ -1,0 +1,54 @@
+"""Structurer service: markdown test case -> Level 1 TestCase."""
+
+import json
+
+from pydantic import ValidationError
+
+from src.exceptions import StructurerError
+from src.llm.protocol import LLMProvider
+from src.model.test_case import TestCase
+from src.prompt_loader import render_prompt
+
+_SYSTEM_PROMPT = "You are an expert QA automation engineer."
+
+
+class Structurer:
+    """Converts a markdown test case specification into a TestCase."""
+
+    def __init__(self, llm: LLMProvider) -> None:
+        """Initialize with the LLM provider to use.
+
+        Args:
+            llm: The LLM provider used to perform the conversion.
+        """
+        self._llm = llm
+
+    def run(self, markdown: str) -> TestCase:
+        """Convert a markdown test case specification into a TestCase.
+
+        Args:
+            markdown: The raw test case specification.
+
+        Returns:
+            The parsed and validated TestCase.
+
+        Raises:
+            StructurerError: If the LLM response is not valid JSON or does
+                not match the expected TestCase shape.
+        """
+        prompt = render_prompt("structurer", test_case_markdown=markdown)
+        response = self._llm.complete(
+            system_prompt=_SYSTEM_PROMPT, user_prompt=prompt, json_mode=True
+        )
+
+        try:
+            data = json.loads(response)
+        except json.JSONDecodeError as exc:
+            raise StructurerError(f"LLM response was not valid JSON: {exc}") from exc
+
+        try:
+            return TestCase.model_validate(data)
+        except ValidationError as exc:
+            raise StructurerError(
+                f"LLM response did not match the TestCase shape: {exc}"
+            ) from exc
