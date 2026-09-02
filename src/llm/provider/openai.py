@@ -31,6 +31,7 @@ class OpenAIProvider:
         )
         self._client = OpenAI(api_key=settings.openai_api_key)
         self._model = settings.openai_model
+        logger.debug("OpenAI client configured (model=%s)", self._model)
 
     def complete(
         self, *, system_prompt: str, user_prompt: str, json_mode: bool = False

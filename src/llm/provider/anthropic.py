@@ -40,6 +40,7 @@ class AnthropicProvider:
         )
         self._client = Anthropic(api_key=settings.anthropic_api_key)
         self._model = settings.anthropic_model
+        logger.debug("Anthropic client configured (model=%s)", self._model)
 
     def complete(
         self, *, system_prompt: str, user_prompt: str, json_mode: bool = False

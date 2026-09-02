@@ -37,6 +37,13 @@ class AzureOpenAIProvider:
             api_version=settings.openai_api_version,
         )
         self._deployment = settings.azure_deployment_name
+        logger.debug(
+            "Azure OpenAI client configured (endpoint=%s, deployment=%s, "
+            "api_version=%s)",
+            settings.azure_openai_endpoint,
+            self._deployment,
+            settings.openai_api_version,
+        )
 
     def complete(
         self, *, system_prompt: str, user_prompt: str, json_mode: bool = False

@@ -1,6 +1,9 @@
 """Loading and rendering of prompt templates."""
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "resources" / "prompts"
 
@@ -17,7 +20,9 @@ def load_prompt(name: str) -> str:
     Raises:
         FileNotFoundError: If no template named `name` exists.
     """
-    return (_PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+    text = (_PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+    logger.debug("Loaded prompt template %r (%d chars)", name, len(text))
+    return text
 
 
 def render_prompt(name: str, **kwargs: str) -> str:

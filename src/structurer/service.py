@@ -45,6 +45,7 @@ class Structurer:
         response = self._llm.complete(
             system_prompt=_SYSTEM_PROMPT, user_prompt=prompt, json_mode=True
         )
+        logger.debug("Raw LLM response (%d chars): %s", len(response), response)
 
         try:
             data = json.loads(response)

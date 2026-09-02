@@ -159,7 +159,7 @@ src/
 |   └── models.py                   # ValidationResult
 ├── cli.py                          # typer app: `generate-script` command
 ├── config.py                       # pydantic-settings Settings + configure_logging()
-├── exceptions.py                   # PipelineError + per-stage subclasses
+├── exceptions.py                   # PipelineError + per-stage subclasses, ConfigurationError
 ├── main.py                         # CLI entrypoint wiring
 ├── pipeline.py                     # orchestrator: Level1 -> Level2 (per-module loop) -> Level3
 └── prompt_loader.py                # load_prompt / render_prompt
