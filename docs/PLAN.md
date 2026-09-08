@@ -154,8 +154,7 @@ src/
 ├── structurer/                     # Level 1
 |   └── service.py
 ├── validator/                      # Level 2
-|   ├── service.py
-|   └── models.py                   # ValidationResult
+|   └── service.py                  # Validator, IdentifierVerdict, ValidationResult
 ├── cli.py                          # typer app: `generate-script` command
 ├── config.py                       # pydantic-settings Settings + configure_logging()
 ├── exceptions.py                   # PipelineError + per-stage subclasses, ConfigurationError
