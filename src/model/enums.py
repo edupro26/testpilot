@@ -16,11 +16,12 @@ class ElementType(StrEnum):
 
 
 class IdentifierType(StrEnum):
-    """The locator strategy used to find an element, e.g. for Browser Library.
+    """The locator strategy used to find an element.
 
-    Mirrors the Browser Library/Playwright selector prefixes (`id=`, `css=`,
-    `xpath=`, `text=`), so the Generator (Level 3) can turn `identifier_type`
-    and `identifier_tracking` into a selector without further translation.
+    Mirrors Playwright's selector-engine prefixes (`css=`, `xpath=`,
+    `text=`), plus a plain `id` shorthand, so the Generator (Level 3) can
+    turn `identifier_type` and `identifier_tracking` into a Playwright
+    locator without further translation.
     """
 
     ID = "id"

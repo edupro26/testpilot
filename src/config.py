@@ -55,7 +55,7 @@ class _LogFormatter(logging.Formatter):
     """Formatter that colors the level name according to its severity."""
 
     def __init__(self, datefmt: str) -> None:
-        """Initialize with the shared log line format and `datefmt`."""
+        """Initialize the formatter with `datefmt`."""
         super().__init__(fmt=_FMT, datefmt=datefmt)
 
     def format(self, record: logging.LogRecord) -> str:

@@ -112,8 +112,8 @@ def test_extracted_data_id_identifier_is_the_bare_attribute_value() -> None:
     """An "id" identifier_type carries the bare id value, no leading '#'.
 
     Pins the format contract documented in resources/prompts/extractor.md,
-    which the Level 3 Generator will rely on to build a `id=<value>`
-    Browser Library selector.
+    which the Level 3 Generator will rely on to build a Playwright
+    `id=<value>` locator.
     """
     extracted = ExtractedData.model_validate(
         {

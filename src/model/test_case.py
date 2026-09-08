@@ -35,10 +35,10 @@ class Module(BaseModel):
     """A page the test case interacts with, and the steps performed on it.
 
     `url` is inferred by the LLM from prose alone at Level 1 and is not yet
-    validated against a real page — that happens when the Crawler and
-    Validator ground it in Level 2. It is kept as a plain string rather than
-    a validated URL type so an imprecise guess here doesn't hard-fail the
-    Structurer; correcting it is Level 2's job.
+    validated against a real page — that happens when the Crawler tries to
+    fetch it in Level 2. It is kept as a plain string rather than a
+    validated URL type so an imprecise guess here doesn't hard-fail the
+    Structurer.
     """
 
     url: str
