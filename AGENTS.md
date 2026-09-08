@@ -9,17 +9,17 @@ docs/
 output/                             # gitignored, per-run generated artifacts
 resources/
 src/
-├── crawler/                        # Level 2, not yet implemented (M2)
-├── extractor/                      # Level 2, not yet implemented (M2)
+├── crawler/                        # Level 2: Crawl4AI wrapper (service.py)
+├── extractor/                      # Level 2: element identifier selection (service.py)
 ├── generator/                      # Level 3, not yet implemented (M3)
 ├── llm/                            # LLM provider abstraction: protocol, factory, provider/
-├── model/                          # shared JSON-contract schemas (TestCase, Module, ...)
+├── model/                          # shared JSON-contract schemas (TestCase, ExtractedData, ...)
 ├── structurer/                     # Level 1: markdown -> structured JSON
-├── validator/                      # Level 2, not yet implemented (M2)
+├── validator/                      # Level 2: element identifier validation (service.py)
 ├── cli.py                          # not yet implemented (M4)
 ├── config.py                       # Settings + logging configuration
-├── exceptions.py                   # PipelineError, StructurerError, ConfigurationError
-├── main.py                         # CLI entrypoint (structure command)
+├── exceptions.py                   # PipelineError, per-stage errors, ConfigurationError
+├── main.py                         # CLI entrypoint (run command)
 ├── pipeline.py                     # not yet implemented (M4)
 └── prompt_loader.py                # load_prompt / render_prompt
 test/                               # pytest suite mirroring src/

@@ -1,6 +1,6 @@
 # GenAI-Test-Script-Automation
 
-This project is a proof of concept with the objective of exploring and designing a GenAI enabler for quick test script generation and automation. This enabler will be a LLM-powered application that, based on a specification of a test case (.md), will generate a test script file built using a testing framework (e.g., .js, .ts, .robot, etc.), which can then be executed to receive a test report.
+This project is a proof of concept with the objective of exploring and designing a GenAI enabler for quick test script generation and automation. This enabler will be a LLM-powered application that, based on a specification of a test case (.md), will generate a test script file built using a testing framework (e.g., .py, .ts, .robot, etc.), which can then be executed to receive a test report.
 
 ## Application Architecture (Prototype)
 
@@ -90,8 +90,8 @@ For each module (url) inside the JSON test case:
 3. For each module URL, the Crawler retrieves page content via Crawl4AI, restricted to publicly accessible, non-authenticated pages.
 4. Extractor selects, per execution step, the UI elements needed via an LLM call.
 5. Validator checks each extracted identifier against the crawled content via an LLM call before it's accepted into the Level 2 output.
-6. Generator turns the validated Level 2 JSON into a single executable Robot Framework script using Browser Library keywords.
-7. The CLI exposes a `--framework` flag; only `robot` is functional in this PoC (`playwright`/`cypress` remain documented, not implemented).
+6. Generator turns the validated Level 2 JSON into a single executable Playwright (Python) test file, using the `pytest-playwright` `page` fixture.
+7. The CLI runs the full pipeline (Level 1 -> Level 2 -> Level 3) as a single default command — e.g. `uv run python -m src.main --framework=playwright <path.md>` — not as separate per-level subcommands. It exposes a `--framework` flag; only `playwright` is functional in this PoC (`robot`/`cypress` remain documented, not implemented).
 8. The pipeline persists the Level 1 JSON, Level 2 JSON, and the generated script as separate, inspectable files per run.
 9. The LLM provider is selectable via `LLM_PROVIDER` (`mock`/`anthropic`/`openai`/`azure_openai`); all four are implemented, though only `azure_openai` (this PoC's primary target) and `mock` (offline development/testing) have been exercised against a real endpoint so far — `anthropic`/`openai` are implemented and unit-tested but not yet run against real credentials.
 10. On a validator failure, the pipeline retries extraction once with feedback, then aborts with a clear error.
@@ -102,16 +102,16 @@ For each module (url) inside the JSON test case:
 3. Code passes the repo's ruff configuration (line-length 88, Google docstrings, double quotes) with zero errors.
 4. Secrets are sourced only from environment variables/`.env`, never hardcoded; `.env` stays gitignored.
 5. No authentication/session handling — crawling is scoped to public pages (documented limitation for this PoC).
-6. Generated Robot Framework scripts must parse cleanly (`robot --dryrun`) for the demoed example(s).
+6. Generated Playwright scripts must pass a structural dry run (`pytest --collect-only`) for the demoed example(s).
 7. Each pipeline stage is independently unit-testable via a mock LLM provider, with no live network/LLM calls required.
 8. Logging uses the standard `logging` module (not `print`), level controlled by `LOG_LEVEL`, with clear per-stage log lines.
 9. Single-user local CLI tool; no persistence layer or multi-tenant concerns in scope.
-10. Script execution, test-report generation, and non-Robot-Framework generators are explicitly out of scope for this PoC (future roadmap items only).
+10. Script execution, test-report generation, and non-Playwright generators are explicitly out of scope for this PoC (future roadmap items only).
 
 ### Supported Test Frameworks
 
-- Robot Framework: implemented in this PoC (via Browser Library)
-- Playwright: documented future target, not implemented in this PoC
+- Playwright: implemented in this PoC (Python, via `pytest-playwright`)
+- Robot Framework: documented future target, not implemented in this PoC
 - Cypress: documented future target, not implemented in this PoC
 - Selenium: documented future target, not implemented in this PoC
 
@@ -128,7 +128,7 @@ resources/
 |   ├── structurer.md
 |   ├── extractor.md
 |   ├── validator.md
-|   └── generator_robot.md
+|   └── generator_playwright.md
 src/
 ├── crawler/                        # Level 2 (Crawl4AI wrapper)
 |   └── service.py                  # Crawler, CrawlResult
@@ -137,7 +137,7 @@ src/
 ├── generator/                      # Level 3
 |   ├── service.py
 |   └── frameworks.py               # TestFramework -> prompt template registry
-|                                     (robot only, for now)
+|                                     (playwright only, for now)
 ├── llm/                            # LLM provider abstraction
 |   ├── protocol.py                 # LLMProvider protocol
 |   ├── factory.py                  # get_llm_provider(settings)
@@ -148,9 +148,9 @@ src/
 |       └── anthropic.py
 ├── model/                          # shared JSON-contract schemas (cross-stage)
 |   ├── enums.py                    # ElementType, IdentifierType, TestFramework
-|   ├── test_case.py                # 
-|   └── extracted_data.py           # Level 2: ExtractedData, ExecutionStepWithData,
-|                                     ModuleWithData, TestCaseWithData
+|   └── test_case.py                # TestCase, Module, ExecutionStep, ExtractedData
+|                                     (one shape for Level 1 and Level 2 — Level 1
+|                                     leaves execution_steps[].extracted_data empty)
 ├── structurer/                     # Level 1
 |   └── service.py
 ├── validator/                      # Level 2
@@ -166,9 +166,9 @@ test/                               # pytest suite mirroring the modules above
 
 ## Roadmap
 
-- [x] **M0 — Scaffolding**: dependencies added to `pyproject.toml` (`pydantic`, `pydantic-settings`, `python-dotenv`, `openai`, `crawl4ai`, `typer`; dev: `pytest`, `pytest-mock`, `robotframework`, `robotframework-browser`), `config.py` (incl. logging setup), prompt loader + structurer template stub (the other stages' templates are added per-milestone as each service is built), test scaffolding, `.gitignore` update for `output/`.
+- [x] **M0 — Scaffolding**: dependencies added to `pyproject.toml` (`pydantic`, `pydantic-settings`, `python-dotenv`, `openai`, `crawl4ai`, `typer`; dev: `pytest`, `pytest-mock`, `playwright`, `pytest-playwright`), `config.py` (incl. logging setup), prompt loader + structurer template stub (the other stages' templates are added per-milestone as each service is built), test scaffolding, `.gitignore` update for `output/`.
 - [x]  **M1 — Structurer (Level 1) against Azure OpenAI**: LLM provider abstraction, Level 1 models, Structurer service + prompt. Demo: run against `LLM_PROVIDER=mock` (offline) and `LLM_PROVIDER=azure_openai` (real), both produce valid Level 1 JSON.
-- [ ] **M2 — Crawler + Extractor + Validator (Level 2)**: Crawl4AI wrapper, Level 2 models, Extractor + Validator services and prompts. Demo: Level 1 -> Level 2 against a real public page, producing real extracted and validated element locators.
-- [ ] **M3 — Generator (Level 3, Robot Framework)**: Generator service + prompt targeting Browser Library keywords. Demo: a hand-authored Level 2 JSON fixture produces a `.robot` file that passes `robot --dryrun`.
-- [ ] **M4 — CLI + end-to-end wiring**: `pipeline.py`, `cli.py`, `generate-script` entry point, a worked example under `examples/`. Demo: one CLI run against a real page, fully live (Azure OpenAI + Crawl4AI), producing a script the reviewer runs manually with `robot`.
-- [ ] **M5 (stretch, future)**: script execution + report ingestion, Playwright/Cypress generators, authenticated-page support, optional integration test suite.
+- [x] **M2 — Crawler + Extractor + Validator (Level 2)**: Crawl4AI wrapper, Level 2 models, Extractor + Validator services and prompts. Demo: Level 1 -> Level 2 against a real public page, producing real extracted and validated element locators.
+- [ ] **M3 — Generator (Level 3, Playwright)**: Generator service + prompt targeting the Playwright Python sync API (`pytest-playwright` `page` fixture). Demo: a hand-authored Level 2 JSON fixture produces a `.py` test file that passes a `pytest --collect-only` dry run.
+- [ ] **M4 — CLI + end-to-end wiring**: `pipeline.py`, `cli.py`, a single default command (`uv run python -m src.main --framework=playwright <path.md>`) running Level 1 -> Level 2 -> Level 3 end-to-end, a worked example under `examples/`. Demo: one CLI run against a real page, fully live (Azure OpenAI + Crawl4AI), producing a script the reviewer runs manually with `pytest`.
+- [ ] **M5 (stretch, future)**: script execution + report ingestion, Robot Framework/Cypress generators, authenticated-page support, optional integration test suite, optional flags to stop the pipeline early (e.g. after Level 1 or Level 2) for debugging.
