@@ -4,11 +4,21 @@ import asyncio
 import logging
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
+from pydantic import BaseModel
 
-from src.crawler.models import CrawlResult
 from src.exceptions import CrawlerError
 
 logger = logging.getLogger(__name__)
+
+
+class CrawlResult(BaseModel):
+    """The outcome of crawling a single public page."""
+
+    url: str
+    success: bool
+    html: str = ""
+    error_message: str = ""
+
 
 _PAGE_TIMEOUT_MS = 30_000
 

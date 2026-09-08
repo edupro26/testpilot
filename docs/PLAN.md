@@ -131,8 +131,7 @@ resources/
 |   └── generator_robot.md
 src/
 ├── crawler/                        # Level 2 (Crawl4AI wrapper)
-|   ├── service.py
-|   └── models.py                   # CrawlResult
+|   └── service.py                  # Crawler, CrawlResult
 ├── extractor/                      # Level 2
 |   └──service.py
 ├── generator/                      # Level 3
