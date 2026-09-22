@@ -88,13 +88,13 @@ For each module (url) inside the JSON test case:
 1. Accept a markdown test-case specification file as CLI input.
 2. Structurer converts the markdown into the Level 1 JSON via an LLM call.
 3. For each module URL, the Crawler retrieves page content via Crawl4AI, restricted to publicly accessible, non-authenticated pages.
-4. Extractor selects, per execution step, the UI elements needed via an LLM call.
-5. Validator checks each extracted identifier against the crawled content via an LLM call before it's accepted into the Level 2 output.
-6. Generator turns the validated Level 2 JSON into a single executable Playwright (Python) test file, using the `pytest-playwright` `page` fixture.
+4. Extractor selects, per execution step, the UI elements needed via an LLM call, recovering via a targeted re-crawl that replays earlier steps' clicks/fills for any step whose target only exists after an interaction elsewhere on the page.
+5. Validator checks each extracted identifier deterministically (DOM uniqueness, then tag/role plausibility for its claimed element type) and via an LLM call for semantic correctness, before it's accepted into the Level 2 output.
+6. Generator turns the validated Level 2 JSON into a single executable Playwright (Python) test file, using the `pytest-playwright` `page` fixture. Each module's generated steps must dismiss page overlays (cookie-consent banners, popups) right after navigation, mirroring the Crawler's own `remove_overlay_elements` behavior — confirmed by a real run that a validated, correct locator can still fail at execution time if an overlay the Crawler silently removed during crawling (see `src/extractor/crawler.py`) is still present and intercepting pointer events on the live page. Reuse Crawl4AI's own `crawl4ai/js_snippet/remove_overlay_elements.js` for this rather than inventing per-site "click Accept" logic, so the executed script's effective page matches what was actually validated.
 7. The CLI runs the full pipeline (Level 1 -> Level 2 -> Level 3) as a single default command — e.g. `uv run python -m src.main --framework=playwright <path.md>` — not as separate per-level subcommands. It exposes a `--framework` flag; only `playwright` is functional in this PoC (`robot`/`cypress` remain documented, not implemented).
 8. The pipeline persists the Level 1 JSON, Level 2 JSON, and the generated script as separate, inspectable files per run.
 9. The LLM provider is selectable via `LLM_PROVIDER` (`mock`/`anthropic`/`openai`/`azure_openai`); all four are implemented, though only `azure_openai` (this PoC's primary target) and `mock` (offline development/testing) have been exercised against a real endpoint so far — `anthropic`/`openai` are implemented and unit-tested but not yet run against real credentials.
-10. On a validator failure, the pipeline retries extraction once with feedback, then aborts with a clear error.
+10. On a validator failure, the pipeline retries extraction once with feedback, then aborts with a clear error. (Recovering a step via a targeted re-crawl for missing content happens inside a single extraction attempt and does not consume this retry.)
 
 ### Non-functional
 1. Python ≥3.13, `uv`-only dependency management, no `pip`.
@@ -130,10 +130,27 @@ resources/
 |   ├── validator.md
 |   └── generator_playwright.md
 src/
-├── crawler/                        # Level 2 (Crawl4AI wrapper)
-|   └── service.py                  # Crawler, CrawlResult
 ├── extractor/                      # Level 2
-|   └──service.py
+|   ├── crawler.py                  # Crawler, CrawlResult (Crawl4AI wrapper;
+|   |                                 forces single-chunk extraction, runs
+|   |                                 replayed JS for replay-based recovery)
+|   ├── scraping.py                 # custom scraping strategy (keyword-aware
+|   |                                 content trimming only -- deliberately
+|   |                                 does not deduplicate structurally-
+|   |                                 identical elements, since a page can
+|   |                                 legitimately repeat one, e.g. carousel
+|   |                                 slides, and collapsing them would hide
+|   |                                 real non-uniqueness from the Validator)
+|   ├── records.py                  # ExtractedRecord, CrawlExtraction, RunCrawl --
+|   |                                 data shapes shared by service.py and
+|   |                                 replay.py
+|   ├── replay.py                   # replay(): recovers a step's identifiers
+|   |                                 via a targeted re-crawl that replays
+|   |                                 earlier steps' actions (click/fill), if
+|   |                                 the step comes up empty
+|   └── service.py                  # Extractor: runs the base crawl + LLM
+|                                     extraction, then delegates recovery
+|                                     to replay.py
 ├── generator/                      # Level 3
 |   ├── service.py
 |   └── frameworks.py               # TestFramework -> prompt template registry
@@ -141,6 +158,8 @@ src/
 ├── llm/                            # LLM provider abstraction
 |   ├── protocol.py                 # LLMProvider protocol
 |   ├── factory.py                  # get_llm_provider(settings)
+|   ├── retry.py                    # RetryingLLMProvider: rate-limit retry
+|   |                                 wrapper applied to every provider
 |   └── provider/                   # concrete LLMProvider implementations
 |       ├── mock.py
 |       ├── azure_openai.py
@@ -154,7 +173,9 @@ src/
 ├── structurer/                     # Level 1
 |   └── service.py
 ├── validator/                      # Level 2
-|   └── service.py                  # Validator, IdentifierVerdict, ValidationResult
+|   ├── service.py                  # Validator, IdentifierVerdict, ValidationResult
+|   └── uniqueness.py               # deterministic DOM checks: uniqueness +
+|                                     tag/role plausibility per element type
 ├── cli.py                          # typer app: `generate-script` command
 ├── config.py                       # pydantic-settings Settings + configure_logging()
 ├── exceptions.py                   # PipelineError + per-stage subclasses, ConfigurationError
@@ -168,7 +189,7 @@ test/                               # pytest suite mirroring the modules above
 
 - [x] **M0 — Scaffolding**: dependencies added to `pyproject.toml` (`pydantic`, `pydantic-settings`, `python-dotenv`, `openai`, `crawl4ai`, `typer`; dev: `pytest`, `pytest-mock`, `playwright`, `pytest-playwright`), `config.py` (incl. logging setup), prompt loader + structurer template stub (the other stages' templates are added per-milestone as each service is built), test scaffolding, `.gitignore` update for `output/`.
 - [x]  **M1 — Structurer (Level 1) against Azure OpenAI**: LLM provider abstraction, Level 1 models, Structurer service + prompt. Demo: run against `LLM_PROVIDER=mock` (offline) and `LLM_PROVIDER=azure_openai` (real), both produce valid Level 1 JSON.
-- [x] **M2 — Crawler + Extractor + Validator (Level 2)**: Crawl4AI wrapper, Level 2 models, Extractor + Validator services and prompts. Demo: Level 1 -> Level 2 against a real public page, producing real extracted and validated element locators.
+- [x] **M2 — Crawler + Extractor + Validator (Level 2)**: Crawl4AI wrapper (content-aware HTML trimming, forced single-chunk extraction to avoid Crawl4AI's own unthrottled concurrent-chunk LLM calls), Level 2 models, Extractor with replay-based recovery (replays earlier steps' clicks/fills via a targeted re-crawl to recover elements that only exist after an interaction, e.g. a submit error message), Validator with deterministic uniqueness + tag/role plausibility checks plus an LLM call for semantic judgment, and a shared LLM-provider retry/backoff wrapper. Demo: Level 1 -> Level 2 against a real public page whose test case includes a step revealed only after a form submission, producing real extracted and validated element locators.
 - [ ] **M3 — Generator (Level 3, Playwright)**: Generator service + prompt targeting the Playwright Python sync API (`pytest-playwright` `page` fixture). Demo: a hand-authored Level 2 JSON fixture produces a `.py` test file that passes a `pytest --collect-only` dry run.
 - [ ] **M4 — CLI + end-to-end wiring**: `pipeline.py`, `cli.py`, a single default command (`uv run python -m src.main --framework=playwright <path.md>`) running Level 1 -> Level 2 -> Level 3 end-to-end, a worked example under `examples/`. Demo: one CLI run against a real page, fully live (Azure OpenAI + Crawl4AI), producing a script the reviewer runs manually with `pytest`.
 - [ ] **M5 (stretch, future)**: script execution + report ingestion, Robot Framework/Cypress generators, authenticated-page support, optional integration test suite, optional flags to stop the pipeline early (e.g. after Level 1 or Level 2) for debugging.

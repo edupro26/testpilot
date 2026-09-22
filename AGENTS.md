@@ -9,8 +9,7 @@ docs/
 output/                             # gitignored, per-run generated artifacts
 resources/
 src/
-├── crawler/                        # Level 2: Crawl4AI wrapper (service.py)
-├── extractor/                      # Level 2: element identifier selection (service.py)
+├── extractor/                      # Level 2: crawl (Crawl4AI) + element identifier selection
 ├── generator/                      # Level 3, not yet implemented (M3)
 ├── llm/                            # LLM provider abstraction: protocol, factory, provider/
 ├── model/                          # shared JSON-contract schemas (TestCase, ExtractedData, ...)
