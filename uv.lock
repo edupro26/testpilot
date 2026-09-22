@@ -2329,6 +2329,8 @@ source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "crawl4ai" },
+    { name = "cssselect" },
+    { name = "lxml" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -2349,6 +2351,8 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=1.2.0" },
     { name = "crawl4ai", specifier = ">=0.9.2" },
+    { name = "cssselect", specifier = ">=1.5.0" },
+    { name = "lxml", specifier = ">=6.1.2" },
     { name = "openai", specifier = ">=3.5.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
