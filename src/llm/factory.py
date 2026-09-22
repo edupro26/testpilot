@@ -7,30 +7,34 @@ from src.llm.provider.anthropic import AnthropicProvider
 from src.llm.provider.azure_openai import AzureOpenAIProvider
 from src.llm.provider.mock import MockProvider
 from src.llm.provider.openai import OpenAIProvider
+from src.llm.retry import RetryingLLMProvider
 
 
 def get_llm_provider(settings: Settings) -> LLMProvider:
     """Return the configured LLMProvider implementation.
 
+    Always wrapped in `RetryingLLMProvider`, so every caller gets
+    rate-limit retry protection regardless of which stage calls it.
+
     Args:
         settings: Application settings, including llm_provider.
 
     Returns:
-        The selected LLMProvider implementation.
+        The selected provider, wrapped with retry protection.
 
     Raises:
-        ConfigurationError: If llm_provider does not name one of the
-            supported providers, or the selected provider is missing
-            required settings.
+        ConfigurationError: If llm_provider names an unsupported provider,
+            or the selected provider is missing required settings.
     """
     match settings.llm_provider:
         case LLMProviderName.MOCK:
-            return MockProvider()
+            provider = MockProvider()
         case LLMProviderName.AZURE_OPENAI:
-            return AzureOpenAIProvider(settings)
+            provider = AzureOpenAIProvider(settings)
         case LLMProviderName.OPENAI:
-            return OpenAIProvider(settings)
+            provider = OpenAIProvider(settings)
         case LLMProviderName.ANTHROPIC:
-            return AnthropicProvider(settings)
+            provider = AnthropicProvider(settings)
         case _:
             raise ConfigurationError(f"{settings.llm_provider} is not supported")
+    return RetryingLLMProvider(provider)
