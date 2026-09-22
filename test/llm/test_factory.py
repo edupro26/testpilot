@@ -7,82 +7,71 @@ from src.llm.provider.anthropic import AnthropicProvider
 from src.llm.provider.azure_openai import AzureOpenAIProvider
 from src.llm.provider.mock import MockProvider
 from src.llm.provider.openai import OpenAIProvider
+from src.llm.retry import RetryingLLMProvider
+
+_PROVIDER_CASES = [
+    ("mock", {}, MockProvider),
+    (
+        "azure_openai",
+        {
+            "AZURE_OPENAI_ENDPOINT": "https://example.openai.azure.com",
+            "AZURE_OPENAI_API_KEY": "fake-key",
+            "AZURE_DEPLOYMENT_NAME": "fake-deployment",
+            "OPENAI_API_VERSION": "2025-04-01-preview",
+        },
+        AzureOpenAIProvider,
+    ),
+    (
+        "openai",
+        {"OPENAI_API_KEY": "fake-key", "OPENAI_MODEL": "gpt-5.6-luna"},
+        OpenAIProvider,
+    ),
+    (
+        "anthropic",
+        {"ANTHROPIC_API_KEY": "fake-key", "ANTHROPIC_MODEL": "claude-4.6-sonnet"},
+        AnthropicProvider,
+    ),
+]
 
 
 @pytest.mark.usefixtures("isolated_settings_env")
-def test_get_llm_provider_returns_mock_by_default() -> None:
-    """With no LLM_PROVIDER set, the mock provider is returned."""
-    provider = get_llm_provider(Settings())
-
-    assert isinstance(provider, MockProvider)
-
-
-@pytest.mark.usefixtures("isolated_settings_env")
-def test_get_llm_provider_returns_azure_openai(monkeypatch: pytest.MonkeyPatch) -> None:
-    """LLM_PROVIDER=azure_openai with full config returns an Azure provider."""
-    monkeypatch.setenv("LLM_PROVIDER", "azure_openai")
-    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com")
-    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "fake-key")
-    monkeypatch.setenv("AZURE_DEPLOYMENT_NAME", "fake-deployment")
-    monkeypatch.setenv("OPENAI_API_VERSION", "2025-04-01-preview")
-
-    provider = get_llm_provider(Settings())
-
-    assert isinstance(provider, AzureOpenAIProvider)
-
-
-@pytest.mark.usefixtures("isolated_settings_env")
-def test_get_llm_provider_azure_openai_missing_config_raises(
+@pytest.mark.parametrize(
+    ("llm_provider", "extra_env", "expected_type"),
+    _PROVIDER_CASES,
+    ids=[case[0] for case in _PROVIDER_CASES],
+)
+def test_get_llm_provider_returns_the_configured_provider_wrapped_in_retry(
     monkeypatch: pytest.MonkeyPatch,
+    llm_provider: str,
+    extra_env: dict[str, str],
+    expected_type: type,
 ) -> None:
-    """LLM_PROVIDER=azure_openai without credentials raises ValueError."""
-    monkeypatch.setenv("LLM_PROVIDER", "azure_openai")
-
-    with pytest.raises(ValueError, match="Missing required AZURE_OPENAI_ENDPOINT"):
-        get_llm_provider(Settings())
-
-
-@pytest.mark.usefixtures("isolated_settings_env")
-def test_get_llm_provider_returns_openai(monkeypatch: pytest.MonkeyPatch) -> None:
-    """LLM_PROVIDER=openai with full config returns an OpenAI provider."""
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
-    monkeypatch.setenv("OPENAI_MODEL", "gpt-5.6-luna")
+    """Every fully-configured provider comes back wrapped in retry protection."""
+    monkeypatch.setenv("LLM_PROVIDER", llm_provider)
+    for key, value in extra_env.items():
+        monkeypatch.setenv(key, value)
 
     provider = get_llm_provider(Settings())
 
-    assert isinstance(provider, OpenAIProvider)
+    assert isinstance(provider, RetryingLLMProvider)
+    assert isinstance(provider.provider, expected_type)
 
 
 @pytest.mark.usefixtures("isolated_settings_env")
-def test_get_llm_provider_openai_missing_config_raises(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("llm_provider", "missing_key"),
+    [
+        ("azure_openai", "AZURE_OPENAI_ENDPOINT"),
+        ("openai", "OPENAI_API_KEY"),
+        ("anthropic", "ANTHROPIC_API_KEY"),
+    ],
+    ids=["azure_openai", "openai", "anthropic"],
+)
+def test_get_llm_provider_missing_config_raises(
+    monkeypatch: pytest.MonkeyPatch, llm_provider: str, missing_key: str
 ) -> None:
-    """LLM_PROVIDER=openai without credentials raises ValueError."""
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    """A real provider without its required credentials raises ValueError."""
+    monkeypatch.setenv("LLM_PROVIDER", llm_provider)
 
-    with pytest.raises(ValueError, match="Missing required OPENAI_API_KEY"):
-        get_llm_provider(Settings())
-
-
-@pytest.mark.usefixtures("isolated_settings_env")
-def test_get_llm_provider_returns_anthropic(monkeypatch: pytest.MonkeyPatch) -> None:
-    """LLM_PROVIDER=anthropic with full config returns an Anthropic provider."""
-    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-4.6-sonnet")
-
-    provider = get_llm_provider(Settings())
-
-    assert isinstance(provider, AnthropicProvider)
-
-
-@pytest.mark.usefixtures("isolated_settings_env")
-def test_get_llm_provider_anthropic_missing_config_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """LLM_PROVIDER=anthropic without credentials raises ValueError."""
-    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-
-    with pytest.raises(ValueError, match="Missing required ANTHROPIC_API_KEY"):
+    with pytest.raises(ValueError, match=f"Missing required {missing_key}"):
         get_llm_provider(Settings())

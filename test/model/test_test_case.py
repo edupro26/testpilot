@@ -1,111 +1,120 @@
 """Tests for src.model.test_case."""
 
+from collections.abc import Callable
+
 import pytest
 from pydantic import ValidationError
 from src.model.enums import ElementType, IdentifierType
 from src.model.test_case import ExecutionStep, ExtractedData, Module, TestCase
 
-
-def test_test_case_round_trips_valid_data() -> None:
-    """A well-formed Level 1 payload (empty extracted_data) validates."""
-    test_case = TestCase.model_validate(
+_LEVEL_1_PAYLOAD = {
+    "name": "Login User with Incorrect Credentials",
+    "modules": [
         {
-            "name": "Login User with Incorrect Credentials",
-            "modules": [
-                {
-                    "url": "https://automationexercise.com",
-                    "description": "Reach the login page",
-                    "execution_steps": [{"step": "Click Signup / Login"}],
-                },
-                {
-                    "url": "https://automationexercise.com/login",
-                    "description": "Verify login fails with incorrect credentials",
-                    "execution_steps": [
-                        {"step": "Enter an incorrect email and password"},
-                        {"step": "Click Login"},
-                        {"step": "Verify the error message is visible"},
-                    ],
-                },
-            ],
+            "url": "https://automationexercise.com/login",
+            "description": "Reach the login page",
+            "execution_steps": [{"step": "Click Signup / Login"}],
         }
-    )
+    ],
+}
 
-    assert test_case.name == "Login User with Incorrect Credentials"
-    assert len(test_case.modules) == 2
-    assert isinstance(test_case.modules[0], Module)
-    assert isinstance(test_case.modules[0].execution_steps[0], ExecutionStep)
-
-
-def test_test_case_round_trips_populated_extracted_data() -> None:
-    """A well-formed Level 2 payload (populated extracted_data) validates."""
-    test_case = TestCase.model_validate(
+_LEVEL_2_PAYLOAD = {
+    "name": "Login User with Incorrect Credentials",
+    "modules": [
         {
-            "name": "Login User with Incorrect Credentials",
-            "modules": [
+            "url": "https://automationexercise.com/login",
+            "description": "Reach the login page",
+            "execution_steps": [
                 {
-                    "url": "https://automationexercise.com/login",
-                    "description": "Reach the login page",
-                    "execution_steps": [
+                    "step": "Click Login",
+                    "extracted_data": [
                         {
-                            "step": "Click Login",
-                            "extracted_data": [
-                                {
-                                    "type": "button",
-                                    "request_description": "The Login button",
-                                    "identifier_type": "css",
-                                    "identifier_tracking": "[data-qa='login-button']",
-                                }
-                            ],
-                        }
+                            "type": "button",
+                            "request_description": "The Login button",
+                            "identifier_type": "css",
+                            "identifier_tracking": "[data-qa='login-button']",
+                        },
+                        {
+                            "type": "input",
+                            "request_description": "The email field",
+                            "identifier_type": "id",
+                            "identifier_tracking": "email",
+                            "input_value": "notarealuser@example.com",
+                        },
                     ],
                 }
             ],
         }
-    )
-
-    extracted = test_case.modules[0].execution_steps[0].extracted_data[0]
-    assert isinstance(extracted, ExtractedData)
-    assert extracted.type == ElementType.BUTTON
-    assert extracted.identifier_type == IdentifierType.CSS
+    ],
+}
 
 
-def test_execution_step_defaults_extracted_data_to_empty_list() -> None:
-    """extracted_data defaults to an empty list when omitted."""
-    step = ExecutionStep.model_validate({"step": "Click Login"})
-
+def _check_level_1(test_case: TestCase) -> None:
+    step = test_case.modules[0].execution_steps[0]
+    assert isinstance(test_case.modules[0], Module)
+    assert isinstance(step, ExecutionStep)
     assert step.extracted_data == []
 
 
-def test_test_case_missing_required_field_raises() -> None:
-    """Omitting a required field (e.g. modules) raises ValidationError."""
+def _check_level_2(test_case: TestCase) -> None:
+    button, email_input = test_case.modules[0].execution_steps[0].extracted_data
+    assert isinstance(button, ExtractedData)
+    assert button.type == ElementType.BUTTON
+    assert button.identifier_type == IdentifierType.CSS
+    assert button.input_value is None
+    assert email_input.type == ElementType.INPUT
+    assert email_input.input_value == "notarealuser@example.com"
+
+
+@pytest.mark.parametrize(
+    ("payload", "check"),
+    [(_LEVEL_1_PAYLOAD, _check_level_1), (_LEVEL_2_PAYLOAD, _check_level_2)],
+    ids=["level_1_empty_extracted_data", "level_2_populated_extracted_data"],
+)
+def test_test_case_round_trips_valid_data(
+    payload: dict, check: Callable[[TestCase], None]
+) -> None:
+    """Both Level 1 (empty extracted_data) and Level 2 (populated) payloads validate."""
+    test_case = TestCase.model_validate(payload)
+
+    assert test_case.name == payload["name"]
+    check(test_case)
+
+
+@pytest.mark.parametrize(
+    "incomplete_payload",
+    [
+        {"name": "Missing modules"},
+        {
+            "name": "Missing execution_steps",
+            "modules": [{"url": "https://x.com", "description": "d"}],
+        },
+    ],
+    ids=["missing_modules", "missing_execution_steps"],
+)
+def test_test_case_missing_required_field_raises(incomplete_payload: dict) -> None:
+    """Omitting a required field (modules, or a module's execution_steps) raises."""
     with pytest.raises(ValidationError):
-        TestCase.model_validate({"name": "Missing modules"})
+        TestCase.model_validate(incomplete_payload)
 
 
-def test_extracted_data_rejects_unknown_type() -> None:
-    """A type value outside ElementType raises ValidationError."""
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("type", "unknown"), ("identifier_type", "unknown")],
+    ids=["unknown_type", "unknown_identifier_type"],
+)
+def test_extracted_data_rejects_unknown_enum_value(field: str, value: str) -> None:
+    """A type/identifier_type value outside its enum raises ValidationError."""
+    payload = {
+        "type": "button",
+        "request_description": "Some element",
+        "identifier_type": "css",
+        "identifier_tracking": ".some-class",
+        field: value,
+    }
+
     with pytest.raises(ValidationError):
-        ExtractedData.model_validate(
-            {
-                "type": "unknown",
-                "request_description": "Some element",
-                "identifier_type": "css",
-                "identifier_tracking": ".some-class",
-            }
-        )
-
-
-def test_extracted_data_rejects_unknown_identifier_type() -> None:
-    """An identifier_type value outside IdentifierType raises ValidationError."""
-    with pytest.raises(ValidationError):
-        ExtractedData.model_validate(
-            {
-                "type": "button",
-                "request_description": "Some element",
-                "identifier_type": "unknown",
-                "identifier_tracking": ".some-class",
-            }
-        )
+        ExtractedData.model_validate(payload)
 
 
 def test_extracted_data_id_identifier_is_the_bare_attribute_value() -> None:
