@@ -1,1 +1,1 @@
-"""Level 2: select the UI element identifiers each execution step needs."""
+"""Level 2: crawl a module's page and select each step's element identifiers."""

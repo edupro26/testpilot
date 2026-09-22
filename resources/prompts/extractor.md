@@ -1,23 +1,20 @@
-You are an expert QA automation engineer. Given a page's cleaned HTML and
-the Level 1 JSON module below, decide which UI elements each execution step
-needs to interact with or verify, and fill in "extracted_data" for every
-step.
+Decide which UI elements each numbered execution step below needs to
+interact with or verify on this page, and return one object per needed
+element.
 
 OBJECTIVE
-- For each execution step, identify the UI elements on the page it needs
-    to locate: elements to click, fields to fill, or text/messages to
-    read for a verification.
+- For each step, identify the UI elements it needs to locate: elements to
+    click, fields to fill, or text/messages to read for a verification.
 - A step that does not require locating anything on this page (e.g. it
-    only navigates to another page) must get an empty "extracted_data"
-    list. Do not invent elements for it.
-- A step may need more than one extracted element (e.g. "enter an
-    incorrect email and password" needs both the email field and the
-    password field).
+    only navigates to another page) needs no object at all. Do not invent
+    elements for it.
+- A step may need more than one element (e.g. "enter an incorrect email
+    and password" needs both the email field and the password field).
 
 RULES
-- Preserve "url", "description", and every "step" text exactly as given.
-    Do not omit, merge, reorder, or reword any execution step.
-- Only extract data that is actually present in the HTML below. Never
+- Reference each step by its 0-based index in "step_index" — do not
+    paraphrase or repeat its text.
+- Only extract data that is actually present in the page content. Never
     invent a selector for an element you cannot find.
 - Prefer stable identifiers, in this order of preference: an "id"
     attribute, then a `data-*` attribute, then other CSS-selectable
@@ -33,15 +30,13 @@ RULES
     - "xpath": a full XPath expression (e.g. "//button[text()='Login']").
     - "text": the element's exact visible text (e.g. "Login").
 - "request_description": a short description of what the element is for,
-    in this execution step's context.
+    in its step's context.
+- "input_value": for elements the step types into or selects a value on
+    (inputs, dropdowns), a plausible literal value implied by the step
+    (e.g. "enter an incorrect email" -> a made-up invalid-looking address).
+    Omit it (or use null) for elements that are only clicked or read, such
+    as buttons, links, or text being verified.
 
-OUTPUT SCHEMA
-{{"url": "...", "description": "...", "execution_steps": [{{"step": "...", "extracted_data": [{{"type": "...", "request_description": "...", "identifier_type": "...", "identifier_tracking": "..."}}]}}]}}
-
-Return ONLY valid JSON, no code fences or commentary.
+Steps:
+{numbered_steps}
 {feedback_section}
-Level 1 module:
-{module_json}
-
-Page HTML:
-{html}
