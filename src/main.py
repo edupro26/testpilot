@@ -55,19 +55,18 @@ def run(markdown_path: _MarkdownPath) -> None:
             for module in test_case.modules
         ]
         result = TestCase(name=test_case.name, modules=modules)
+        logger.info("Successfully extracted and validated %d modules", len(modules))
+        logger.debug("Extracted JSON: %s", result.model_dump_json())
 
         generator = Generator(llm)
         script = generator.run(result)
+        output_path = Path("output") / f"{markdown_path.stem}.py"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(script, encoding="utf-8")
+        logger.info("Wrote generated script to %s", output_path)
+        # logger.info(f"{output_path}:\n{script}")
     except Exception as exc:
         _log_fail(str(exc), exc, traceback=True)
-
-    typer.echo(result.model_dump_json(indent=2))
-
-    output_path = Path("output") / f"{markdown_path.stem}.py"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(script, encoding="utf-8")
-    logger.info("Wrote generated script to %s", output_path)
-    typer.echo(f"\nGenerated script written to {output_path}")
 
 
 def _extract_module(
