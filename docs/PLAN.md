@@ -92,7 +92,7 @@ For each module (url) inside the JSON test case:
 5. Validator checks each extracted identifier deterministically (DOM uniqueness, then tag/role plausibility for its claimed element type) and via an LLM call for semantic correctness, before it's accepted into the Level 2 output.
 6. Generator turns the validated Level 2 JSON into a single executable Playwright (Python) test file, using the `pytest-playwright` `page` fixture. Each module's generated steps must dismiss page overlays (cookie-consent banners, popups) right after navigation, mirroring the Crawler's own `remove_overlay_elements` behavior — confirmed by a real run that a validated, correct locator can still fail at execution time if an overlay the Crawler silently removed during crawling (see `src/extractor/crawler.py`) is still present and intercepting pointer events on the live page. Reuse Crawl4AI's own `crawl4ai/js_snippet/remove_overlay_elements.js` for this rather than inventing per-site "click Accept" logic, so the executed script's effective page matches what was actually validated.
 7. The CLI runs the full pipeline (Level 1 -> Level 2 -> Level 3) as a single default command — e.g. `uv run python -m src.main --framework=playwright <path.md>` — not as separate per-level subcommands. It exposes a `--framework` flag; only `playwright` is functional in this PoC (`robot`/`cypress` remain documented, not implemented).
-8. The pipeline persists the Level 1 JSON, Level 2 JSON, and the generated script as separate, inspectable files per run.
+8. The pipeline persists the Level 2 JSON and the generated script as separate, inspectable files per run, under `output/<input's parent folder name>/`, both named after the input markdown file (e.g. `examples/automation/test_x.md` -> `output/automation/test_x.json` and `output/automation/test_x.py`). Persisting the Level 1 JSON separately is still pending (M4).
 9. The LLM provider is selectable via `LLM_PROVIDER` (`mock`/`anthropic`/`openai`/`azure_openai`); all four are implemented, though only `azure_openai` (this PoC's primary target) and `mock` (offline development/testing) have been exercised against a real endpoint so far — `anthropic`/`openai` are implemented and unit-tested but not yet run against real credentials.
 10. On a validator failure, the pipeline retries extraction once with feedback, then aborts with a clear error. (Recovering a step via a targeted re-crawl for missing content happens inside a single extraction attempt and does not consume this retry.)
 
@@ -121,14 +121,16 @@ For each module (url) inside the JSON test case:
 docs/
 ├── images/                         # images for documentation
 └── PLAN.md                         # Project Planning and roadmap
-output/                             # gitignored, per-run generated artifacts (JSON + script)
-resources/
-├── examples/                       # sample test-case markdown inputs for demos
-└── prompts/                        # one template per pipeline stage
-|   ├── structurer.md
-|   ├── extractor.md
-|   ├── validator.md
-|   └── generator_playwright.md
+examples/                           # sample test-case markdown inputs, grouped by
+|                                     target site (e.g. examples/automation/)
+output/                             # gitignored, per-run generated artifacts
+|                                     (JSON + script), mirroring examples/'s
+|                                     per-site subfolders
+prompts/                            # one template per pipeline stage
+├── structurer.md
+├── extractor.md
+├── validator.md
+└── generator_playwright.md
 src/
 ├── extractor/                      # Level 2
 |   ├── crawler.py                  # Crawl4AI wrapper

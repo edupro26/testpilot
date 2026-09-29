@@ -5,7 +5,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_PROMPTS_DIR = Path(__file__).parent.parent / "resources" / "prompts"
+_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 def load_prompt(name: str) -> str:
