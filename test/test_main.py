@@ -126,7 +126,7 @@ def test_load_settings_or_fail_exits_on_invalid_configuration(
 def test_cli_runs_the_full_pipeline_against_a_mock_provider(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    """The CLI runs the full pipeline end to end and prints valid Level 2 JSON.
+    """The CLI runs the full pipeline end to end and writes the generated script.
 
     Entirely offline: both the Crawler and the LLM provider are mocked.
     """
@@ -163,7 +163,15 @@ def test_cli_runs_the_full_pipeline_against_a_mock_provider(
             ]
         }
     )
-    responses = iter([structurer_json, extractor_json, validator_json])
+    generator_script = (
+        "from playwright.sync_api import Page, expect\n\n\n"
+        "def test_smoke_test(page: Page) -> None:\n"
+        "    # MODULE 0\n"
+        '    page.locator("css=#login").click()\n'
+    )
+    responses = iter(
+        [structurer_json, extractor_json, validator_json, generator_script]
+    )
 
     def _next_response(_system_prompt: str, _user_prompt: str) -> str:
         return next(responses)
@@ -179,6 +187,9 @@ def test_cli_runs_the_full_pipeline_against_a_mock_provider(
     result = CliRunner().invoke(app, [str(markdown_path)])
 
     assert result.exit_code == 0, result.output
-    output = json.loads(result.stdout)
-    identifier = output["modules"][0]["execution_steps"][0]["extracted_data"][0]
-    assert identifier["identifier_tracking"] == "#login"
+
+    script_path = tmp_path / "output" / "case.py"
+    assert script_path.exists()
+    script = script_path.read_text(encoding="utf-8")
+    assert 'page.locator("css=#login")' in script
+    assert "_dismiss_overlays(page)" in script

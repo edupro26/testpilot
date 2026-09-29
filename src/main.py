@@ -11,6 +11,7 @@ from src.config import Settings, configure_logging
 from src.exceptions import ValidatorError
 from src.extractor.crawler import Crawler
 from src.extractor.service import Extractor
+from src.generator.service import Generator
 from src.llm.factory import get_llm_provider
 from src.model.test_case import Module, TestCase
 from src.structurer.service import Structurer
@@ -27,12 +28,14 @@ _MarkdownPath = Annotated[
 
 @app.command()
 def run(markdown_path: _MarkdownPath) -> None:
-    """Run the pipeline on a markdown test case and print its current output.
+    """Run the full pipeline on a markdown test case and print its output.
 
-    Single entry point -- levels aren't run separately. Currently runs
-    Structurer -> Extractor/Validator (Level 1 -> 2) and prints Level 2
-    JSON; Level 3 (Generator) will extend this without changing the
-    invocation.
+    This is the pipeline's single entry point -- levels are not meant to
+    be run separately. It runs Structurer -> Extractor/Validator (Level 1
+    -> Level 2) -> Generator (Level 3), prints the Level 2 JSON, and
+    writes the generated Playwright script under `output/`. Framework
+    selection (a `--framework` flag) and persisting the Level 1/2 JSON as
+    separate files are still pending (M4).
     """
     settings = _load_settings_or_fail()
     logger.info(
@@ -51,11 +54,19 @@ def run(markdown_path: _MarkdownPath) -> None:
             _extract_module(module, extractor, validator)
             for module in test_case.modules
         ]
+        result = TestCase(name=test_case.name, modules=modules)
+        logger.info("Successfully extracted and validated %d modules", len(modules))
+        logger.debug("Extracted JSON: %s", result.model_dump_json())
+
+        generator = Generator(llm)
+        script = generator.run(result)
+        output_path = Path("output") / f"{markdown_path.stem}.py"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(script, encoding="utf-8")
+        logger.info("Wrote generated script to %s", output_path)
+        # logger.info(f"{output_path}:\n{script}")
     except Exception as exc:
         _log_fail(str(exc), exc, traceback=True)
-
-    result = TestCase(name=test_case.name, modules=modules)
-    typer.echo(result.model_dump_json(indent=2))
 
 
 def _extract_module(

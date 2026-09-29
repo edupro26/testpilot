@@ -28,3 +28,9 @@ class IdentifierType(StrEnum):
     CSS = "css"
     XPATH = "xpath"
     TEXT = "text"
+
+
+class TestFramework(StrEnum):
+    """A target test framework the Generator can produce a script for."""
+
+    PLAYWRIGHT = "playwright"

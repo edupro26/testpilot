@@ -21,5 +21,9 @@ class ValidatorError(PipelineError):
     """Raised when the Validator cannot produce a valid ValidationResult."""
 
 
+class GeneratorError(PipelineError):
+    """Raised when the Generator cannot produce a valid test script."""
+
+
 class ConfigurationError(ValueError):
     """Raised when required application configuration is missing or invalid."""

@@ -10,7 +10,7 @@ output/                             # gitignored, per-run generated artifacts
 resources/
 src/
 ├── extractor/                      # Level 2: crawl (Crawl4AI) + element identifier selection
-├── generator/                      # Level 3, not yet implemented (M3)
+├── generator/                      # Level 3: Playwright (pytest-playwright) script generation
 ├── llm/                            # LLM provider abstraction: protocol, factory, provider/
 ├── model/                          # shared JSON-contract schemas (TestCase, ExtractedData, ...)
 ├── structurer/                     # Level 1: markdown -> structured JSON
