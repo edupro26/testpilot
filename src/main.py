@@ -28,14 +28,15 @@ _MarkdownPath = Annotated[
 
 @app.command()
 def run(markdown_path: _MarkdownPath) -> None:
-    """Run the full pipeline on a markdown test case and print its output.
+    """Run the full pipeline on a markdown test case and persist its output.
 
     This is the pipeline's single entry point -- levels are not meant to
     be run separately. It runs Structurer -> Extractor/Validator (Level 1
-    -> Level 2) -> Generator (Level 3), prints the Level 2 JSON, and
-    writes the generated Playwright script under `output/`. Framework
-    selection (a `--framework` flag) and persisting the Level 1/2 JSON as
-    separate files are still pending (M4).
+    -> Level 2) -> Generator (Level 3), then writes the validated Level 2
+    JSON and the generated Playwright script under
+    `output/<markdown_path's parent folder name>/`, both named after the
+    input markdown file. Framework selection (a `--framework` flag) is
+    still pending (M4).
     """
     settings = _load_settings_or_fail()
     logger.info(
@@ -60,11 +61,14 @@ def run(markdown_path: _MarkdownPath) -> None:
 
         generator = Generator(llm)
         script = generator.run(result)
-        output_path = Path("output") / f"{markdown_path.stem}.py"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(script, encoding="utf-8")
-        logger.info("Wrote generated script to %s", output_path)
-        # logger.info(f"{output_path}:\n{script}")
+
+        output_dir = Path("output") / markdown_path.parent.name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        script_path = output_dir / f"{markdown_path.stem}.py"
+        json_path = output_dir / f"{markdown_path.stem}.json"
+        script_path.write_text(script, encoding="utf-8")
+        json_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        logger.info("Wrote generated script to %s", script_path)
     except Exception as exc:
         _log_fail(str(exc), exc, traceback=True)
 

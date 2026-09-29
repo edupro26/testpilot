@@ -120,7 +120,7 @@ def test_extracted_data_rejects_unknown_enum_value(field: str, value: str) -> No
 def test_extracted_data_id_identifier_is_the_bare_attribute_value() -> None:
     """An "id" identifier_type carries the bare id value, no leading '#'.
 
-    Pins the format contract documented in resources/prompts/extractor.md,
+    Pins the format contract documented in prompts/extractor.md,
     which the Level 3 Generator will rely on to build a Playwright
     `id=<value>` locator.
     """

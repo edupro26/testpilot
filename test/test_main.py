@@ -126,11 +126,12 @@ def test_load_settings_or_fail_exits_on_invalid_configuration(
 def test_cli_runs_the_full_pipeline_against_a_mock_provider(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    """The CLI runs the full pipeline end to end and writes the generated script.
+    """The CLI runs the full pipeline end to end and writes JSON + script.
 
     Entirely offline: both the Crawler and the LLM provider are mocked.
     """
-    markdown_path = tmp_path / "case.md"
+    markdown_path = tmp_path / "automation" / "case.md"
+    markdown_path.parent.mkdir()
     markdown_path.write_text("# Smoke test\n\nClick the login button.")
 
     structurer_json = json.dumps(
@@ -188,8 +189,15 @@ def test_cli_runs_the_full_pipeline_against_a_mock_provider(
 
     assert result.exit_code == 0, result.output
 
-    script_path = tmp_path / "output" / "case.py"
+    output_dir = tmp_path / "output" / "automation"
+    script_path = output_dir / "case.py"
+    json_path = output_dir / "case.json"
     assert script_path.exists()
     script = script_path.read_text(encoding="utf-8")
     assert 'page.locator("css=#login")' in script
     assert "_dismiss_overlays(page)" in script
+
+    assert json_path.exists()
+    output = json.loads(json_path.read_text(encoding="utf-8"))
+    identifier = output["modules"][0]["execution_steps"][0]["extracted_data"][0]
+    assert identifier["identifier_tracking"] == "#login"

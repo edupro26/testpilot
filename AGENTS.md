@@ -6,8 +6,9 @@
 
 ```
 docs/
-output/                             # gitignored, per-run generated artifacts
-resources/
+examples/                           # sample test-case markdown inputs, grouped by target site
+output/                             # gitignored, per-run generated artifacts, mirrored per examples/ subfolder
+prompts/                            # one template per pipeline stage
 src/
 ├── extractor/                      # Level 2: crawl (Crawl4AI) + element identifier selection
 ├── generator/                      # Level 3: Playwright (pytest-playwright) script generation
