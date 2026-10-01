@@ -45,10 +45,8 @@ Two honest caveats on that result:
   verifications — nearly half the test — and MCP emits no code for them.
   The `expect(...)` line was written by hand, not harvested. See
   §6 for the workaround.
-- **No LLM drove this.** The tool calls were scripted, with refs resolved
-  by regex. The spike proves MCP's output is portable and executable; it
-  does **not** yet prove an LLM can drive the loop reliably. That is the
-  one unproven link in the chain.
+- **No LLM drove this particular run.** The tool calls were scripted, with
+  refs resolved by regex. A separate live run (§7) closed that gap.
 
 ### 3. MCP solves the duplicate-selector problem by itself
 
@@ -120,6 +118,43 @@ match, but the assertion is weaker than the spec's wording.
 Also found: `browser_evaluate` ignores `--codegen python` and emits
 **JavaScript** (`await page.getByText('…').evaluate(...)`). It must stay
 off the allowlist, or JS will leak into a Python script.
+
+### 7. A live LLM drives the loop and self-heals — confirmed
+
+Run against the real Azure deployment (`gpt-5.5`), 11 allowlisted MCP tools
+exposed as function definitions, for the single step
+*"Click on the 'Signup / Login' button"*:
+
+```
+turn 0  browser_find {"text": "Signup / Login"}            -> ref e23
+turn 1  browser_click {"target": "e23"}                    -> ERROR (overlay)
+turn 2  browser_find {"regex": "/Consent|Accept|Agree|…/i"} -> ref e851
+turn 3  browser_click {"target": "e851"}                   -> page.get_by_role("button", name="Consent").click()
+turn 4  browser_click {"target": "e23"}                    -> page.get_by_role("link", name=" Signup / Login").click()
+turn 5  step_done
+```
+
+Harvested result:
+
+```python
+page.get_by_role("button", name="Consent").click()        # optional
+page.get_by_role("link", name=" Signup / Login").click()
+```
+
+Four things worked without being spoon-fed:
+
+- It **self-healed** from the overlay error — read the call log, went
+  looking for a consent button, dismissed it, retried.
+- It **excluded exploratory detours** — the failed click and both `find`
+  calls are absent from the harvested code.
+- It **marked the consent click `optional`** unprompted, with a correct
+  reason, which is exactly the guard the hand-written sample used.
+- **Azure accepted MCP's raw `input_schema`** once `$schema` and
+  `additionalProperties` were stripped. Nothing else needed rewriting.
+
+Caveat: `temperature=0` is rejected by this deployment ("Only the default
+(1) value is supported"). Note that `Extractor._extra_args()` currently
+hardcodes `temperature: 0.0` for Azure — it would 400 against `gpt-5.5`.
 
 ## How to expose MCP to the LLM provider
 
@@ -224,16 +259,21 @@ an `optional` flag the Generator turns into that guard.
 install to any future image (see traps below). That is a real cost of the
 approach, not an open question.
 
+**Validator keeps a narrowed LLM call.** Deterministic replay already
+answers "does this code run". The LLM call survives only to answer "did
+this actually verify what the step asked?" — the semantic question replay
+cannot reach. It stays a distinct stage rather than folding into the
+extraction loop, so the two roles stay separable.
+
 ## Still open
 
-1. **Does the semantic LLM Validator survive?** Deterministic replay now
-   catches "the locator doesn't resolve". The LLM's only remaining job is
-   "did this actually verify what the step asked?" — possibly folded into
-   the extraction loop rather than kept as a separate stage.
-2. Per-step conversation vs one per module, and the tool-iteration cap.
-3. Assertion strength, given the truncation noted in §6.
-4. Leading-space accessible names (`name=" Signup / Login"`) come through
+1. Per-step conversation vs one per module, and the tool-iteration cap
+   (the live run took 6 turns for one step).
+2. Assertion strength, given the text truncation noted in §6.
+3. Leading-space accessible names (`name=" Signup / Login"`) come through
    verbatim. Harmless here, but worth watching.
+4. Whether `optional` statements should be deduplicated across steps — a
+   consent click harvested into step 3 shouldn't reappear in step 5.
 
 ## Reference — reproducing the spike
 
