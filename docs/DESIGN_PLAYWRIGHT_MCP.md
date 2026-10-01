@@ -105,6 +105,15 @@ Sync Playwright objects are bound to their creating thread, and that thread
 must not be running an event loop. Since the `mcp` SDK is async-only, one
 of the two has to move. Moving MCP is the smaller change:
 
+> **Both halves were spiked before this was written.** A `ClientSession`
+> held open in a background thread, driven from the main thread through a
+> sync facade (`run_coroutine_threadsafe`), listed tools and ran a 3-action
+> sequence, then shut down cleanly. In the same process afterwards, the
+> harvested lines were `exec`'d verbatim against a sync Playwright page
+> with `{"page", "expect", "PWTimeout"}` in scope — including an
+> `expect(...)` assertion and an `optional` block whose banner was absent
+> (it did not raise). Neither is assumed.
+
 - `src/extractor/mcp.py` is the only module containing `async` at all, and
   it is hidden behind a sync interface.
 - The extractor, validator, generator, `main.py` and the entire test suite
