@@ -128,27 +128,13 @@ of the two has to move. Moving MCP is the smaller change:
 the code is now self-describing, so neither carries information any more.
 
 ```python
-class StatementKind(StrEnum):
-    ACTION = "action"        # a harvested line, executed as-is
-    ASSERTION = "assertion"  # a harvested locator, wrapped in expect(...)
-
-
-class Assertion(StrEnum):
-    TO_BE_VISIBLE = "to_be_visible"
-    TO_CONTAIN_TEXT = "to_contain_text"
-    TO_HAVE_TEXT = "to_have_text"
-    TO_HAVE_VALUE = "to_have_value"
-
-
 class StepStatement(BaseModel):
     """One validated Playwright statement belonging to an execution step."""
 
-    kind: StatementKind
-    # ACTION: the full emitted line, verbatim.
-    # ASSERTION: the emitted locator expression only, with `.hover()` stripped.
+    # The full line MCP emitted, verbatim. Actions and assertions alike:
+    #   page.get_by_role("link", name="Signup / Login").click()
+    #   expect(page.get_by_role("heading", name="Login")).to_be_visible()
     code: str
-    assertion: Assertion | None = None   # ASSERTION only
-    expected: str | None = None          # ASSERTION only, for text/value checks
     # Best-effort: the element may legitimately be absent on a later run.
     # A consent banner is the motivating case.
     optional: bool = False
@@ -164,26 +150,34 @@ class ExecutionStep(BaseModel):
 becomes advisory: the agent harvests its own `page.goto(...)` when it
 navigates, and a module reached by clicking produces no `goto` at all.
 
-### Why assertions are split this way
+### Assertions need no special handling
 
-MCP emits code for *actions* only; a verification step has nothing to
-harvest. The workaround is to hover the element, which emits its locator as
-a side effect, then strip `.hover()`.
+The `testing` capability (see *MCP transport*) adds
+`browser_verify_element_visible`, `browser_verify_text_visible`,
+`browser_verify_value` and `browser_verify_list_visible`. These **execute
+the assertion against the live page and emit it as Python**:
 
-That leaves the `expect(...)` wrapper itself to be composed — so the
-contract splits the risk. The **locator stays verbatim** (the part that is
-hard to get right and must be proven against a live page), while the
-wrapper is **template-rendered** from an enum (the part that is trivial and
-must not be free-written).
+```
+browser_verify_element_visible {"role": "heading", "accessibleName": "Login to your account"}
+→ ### Ran Playwright code
+  expect(page.get_by_role("heading", name="Login to your account")).to_be_visible()
+```
 
-Assertions default to the strongest form the step supports. When the step
-quotes text — *"Verify that the error message 'Your email or password is
-incorrect!' is visible"* — the renderer emits `to_contain_text` with the
-**full quoted string from the step**, not `to_be_visible` on the locator.
-This matters because Playwright's locator generator truncates: hovering
-that paragraph yields `get_by_text("Your email or password is")`, dropping
-"incorrect!". Asserting on the step's own wording recovers what truncation
-lost.
+So a verification step harvests exactly like an action step. There is no
+`kind` discriminator, no `Assertion` enum, no composed wrapper and no
+truncation problem — the contract is **one verbatim line, always**.
+
+A failing verification returns `isError=True` with a terse reason (`Text
+not found`), giving the agent the same recover-and-retry signal it already
+gets from a failed click.
+
+> An earlier draft harvested assertion locators via `browser_hover` and
+> composed the `expect(...)` wrapper from an enum, because the published
+> docs list these tools but `--help` does not. They do exist — see the
+> transport section. The hover workaround is dropped.
+
+`browser_generate_locator` is **not** used: it returns JavaScript syntax
+(`getByRole('heading', { name: '...' })`) regardless of `--codegen python`.
 
 ## Rendering: one function, both stages
 
@@ -197,10 +191,12 @@ If they diverge, "validated" stops meaning "shipped".
 
 | Input | Output |
 |---|---|
-| action | `page.get_by_role("link", name="X").click()` |
-| action, `optional` | `try/except` with a short scoped timeout (below) |
-| assertion, `to_be_visible` | `expect(page.get_by_text("X")).to_be_visible()` |
-| assertion, `to_contain_text` | `expect(page.get_by_text("X")).to_contain_text("full text")` |
+| statement | its `code`, unchanged |
+| statement, `optional` | `try/except` with a short scoped timeout (below) |
+
+With assertions now harvested whole, rendering is the identity function in
+every case but `optional`. That is the point: the less this function does,
+the less can drift between what was validated and what ships.
 
 The `optional` wrapper must not be a bare `try/except`:
 
@@ -223,17 +219,14 @@ genuine bug in an optional step forever.
 replay step `exec`s whatever comes back. That is not good enough.
 
 The extractor records every line MCP emitted under `### Ran Playwright
-code` for a **successful** call during this step's loop. `step_done` is
-then checked against that set:
+code` for a **successful** call during this step's loop. Each `step_done`
+statement must match one of those lines exactly, or the step fails.
 
-- an `ACTION` statement must match an emitted line exactly;
-- an `ASSERTION` statement's `code` must match an emitted `.hover()` line
-  with `.hover()` stripped.
-
-Anything else is rejected and the step fails. This is one set-membership
-check, and it converts the central guarantee of the design from a prompt
-instruction into something a unit test can assert. It also closes the
-arbitrary-code-execution hole that `exec` would otherwise open.
+This is one set-membership check — simple precisely because assertions are
+now harvested whole rather than reassembled. It converts the central
+guarantee of the design from a prompt instruction into something a unit
+test can assert, and closes the arbitrary-code-execution hole that `exec`
+would otherwise open.
 
 ## Module layout
 
@@ -253,15 +246,54 @@ src/
 │   ├── protocol.py      # + conversation/tool-calling interface
 │   └── provider/*.py    # each provider implements it
 └── model/
-    ├── enums.py         # - IdentifierType, - ElementType, + StatementKind, + Assertion
+    ├── enums.py         # - IdentifierType, - ElementType (both now redundant)
     └── test_case.py     # ExtractedData -> StepStatement
 ```
 
-### `extractor/mcp.py`
+### `extractor/mcp.py` — MCP transport
 
-Owns the subprocess and the background event loop. Exposes a narrow
-protocol so tests can substitute a fake and **no test ever spawns `npx`**
-(non-functional req 7):
+**The app does not spawn the MCP server. It connects to one over HTTP.**
+
+Playwright MCP runs as a standalone server with `--port`, and the `mcp`
+SDK's `streamable_http_client` connects to it by URL. Verified: a full
+harvest (navigate → consent → click → verify) ran over
+`http://localhost:8931/mcp` with the same results as stdio.
+
+This removes the entire problem class rather than working around it:
+
+| | stdio (spawn) | HTTP (connect) |
+|---|---|---|
+| Node on PATH | app's problem | not the app's problem |
+| WSL `/mnt/c/npx` trap | real | gone |
+| Browser install | app's problem | server's problem |
+| Docker | Node + browsers in the app image | separate service, `depends_on` |
+| Config | command + args + env | one URL |
+| Test isolation | must avoid spawning | nothing to avoid |
+
+The application code becomes OS-agnostic: one setting, `MCP_URL`. In Docker
+the server is a `docker-compose` service built from the official
+`mcr.microsoft.com/playwright` image; locally a developer runs one command,
+documented in AGENTS.md:
+
+```bash
+npx @playwright/mcp@latest --port 8931 --headless --isolated \
+    --codegen python --browser chromium --caps testing
+```
+
+Every flag is load-bearing: `--codegen python` is the entire mechanism,
+`--caps testing` adds the `browser_verify_*` tools, `--browser chromium`
+because the default `chrome` channel is not installed, `--isolated` so
+consent banners reappear on each run (otherwise the agent never learns to
+dismiss them and the fresh `pytest` run trips over one).
+
+> **Still a background thread.** HTTP removes the subprocess, not the
+> async. `streamable_http_client` is async like the rest of the SDK, so the
+> sync facade from the previous section stays exactly as designed and
+> verified — only the transport inside it changes.
+
+A convenience fallback that spawns the server when `MCP_URL` is unset is
+possible later, but it is not the primary path and nothing should depend
+on it.
 
 ```python
 class MCPToolset(Protocol):
@@ -269,24 +301,43 @@ class MCPToolset(Protocol):
     def call_tool(self, name: str, arguments: dict) -> McpResult: ...
 ```
 
-**Tool allowlist** — ten tools, deliberately narrow:
+**Tool allowlist** — core plus `testing`:
 
 ```
 browser_navigate  browser_click      browser_type       browser_fill_form
-browser_select_option  browser_press_key  browser_hover
-browser_wait_for  browser_snapshot   browser_find
+browser_select_option  browser_press_key  browser_wait_for
+browser_snapshot  browser_find
+browser_verify_element_visible  browser_verify_text_visible
+browser_verify_value            browser_verify_list_visible
 ```
 
-Two exclusions are deliberate and must not be relaxed:
+Three exclusions are deliberate and must not be relaxed:
 
 - **`browser_run_code_unsafe`** is RCE-equivalent by Microsoft's own
   description.
-- **`browser_evaluate`** ignores `--codegen python` and emits JavaScript,
-  which would leak into a Python script.
+- **`browser_evaluate`** ignores `--codegen python` and emits JavaScript.
+- **`browser_generate_locator`** returns JavaScript locator syntax.
+
+The allowlist is **validated against `list_tools()` at startup** and fails
+loudly if a name is missing. With `@latest` rather than a pin (see below),
+that check is what turns an upstream rename into a clear error instead of a
+silently degraded agent.
 
 MCP's raw `input_schema` passes straight through as the provider's tool
 schema, after stripping `$schema` and `additionalProperties` — verified
 accepted by Azure.
+
+### Versioning: `@latest`, not a pin
+
+The server is tracked at `@latest`. The app connects by URL and never names
+a version, so the version lives wholly in whatever launches the server
+(compose file, dev command).
+
+The cost is real and worth stating: the tool surface moves. 0.0.83 exposes
+25 tools by default, 30 with `--caps testing`, 50 with all capabilities,
+and `--help` does not document the `testing` cap at all. The startup
+allowlist check is the mitigation — it converts an upstream change from a
+mysterious behavioural regression into an immediate, named failure.
 
 ### `llm/protocol.py`
 
@@ -369,23 +420,19 @@ any other — which is a better answer to functional req 6 than injecting
 ## Settings
 
 ```
-MCP_COMMAND          # absolute path to the node/npx binary
-MCP_PACKAGE          # pinned, e.g. @playwright/mcp@0.0.83 -- never @latest
-MCP_BROWSER          # chromium (the default `chrome` channel is not installed)
-MCP_HEADLESS         # default true
-MCP_OUTPUT_DIR       # or it writes .playwright-mcp/ into the cwd
+MCP_URL              # e.g. http://localhost:8931/mcp
 MCP_MAX_TURNS        # tool-iteration cap per step
 ```
 
-`MCP_COMMAND` must be an absolute path: on WSL a bare `npx` resolves to the
-*Windows* binary under `/mnt/c`, which would drive a Windows browser across
-the filesystem boundary.
+That is the whole surface. Browser choice, headless, codegen language and
+capabilities are all server-side launch flags, not application config —
+which is precisely why the app stops caring what OS it runs on.
 
 ## Testing
 
 | Layer | Approach |
 |---|---|
-| `mcp.py` | Fake `MCPToolset`. No subprocess, no `npx`, ever. |
+| `mcp.py` | Fake `MCPToolset`. No server, no network, ever. |
 | `agent.py` | Scripted `MockProvider` tool calls + fake toolset. Must cover: a rejected free-written statement, and an error-then-recover sequence. |
 | `render.py` | Pure function — table-driven over every kind/assertion/optional combination. |
 | `replay.py` | Real sync Playwright against a `data:` URL or a local fixture page; no network. |
@@ -411,19 +458,26 @@ lands first.
   single spiked step took 6 turns. A 7-step case is a different order of
   magnitude from today's one-call-per-module extraction. Needs measuring
   before this is called viable.
-- **Two browser installs.** Node Playwright wants its own chromium build
-  (1247) separate from the Python one (1234/1243) — ~300MB extra, and Node
-  itself, in any future Docker image (M5).
-- **A fast-moving dependency.** 0.0.83 ships 25 tools; `main` has 70+ and
-  the published docs describe tools that do not exist in the release.
-  `browser_generate_locator` would replace the hover trick when it lands.
+- **A second browser, in its own container.** The MCP server needs Node
+  Playwright's own chromium build, separate from the Python one. Over HTTP
+  that weight lands in a sidecar image rather than the app image, but it is
+  still ~300MB plus Node in the compose stack (M5).
+- **An operational dependency.** The app now needs a reachable MCP server
+  before Level 2 can run. A clear startup failure (connect + allowlist
+  check) matters more than it would for an in-process library.
+- **A fast-moving dependency.** Tracking `@latest` means the tool surface
+  can shift under us — 25 / 30 / 50 tools depending on `--caps`, and
+  `--help` does not even document `testing`. The startup allowlist check is
+  the guard.
 - **Non-determinism.** The agent may harvest a different-but-valid locator
   across runs. Replay proves each one works; it does not make them stable.
 
 ## Open questions
 
 1. **Restoring MCP to the pre-step state on retry.** Currently out of
-   scope, with the limitation documented instead.
+   scope, with the limitation documented instead. Worth revisiting: with an
+   HTTP server, a retry could open a *fresh MCP session* and replay the
+   validated prefix into it, which would make retries clean.
 2. **Deduplicating `optional` statements across steps.** A consent click
    harvested into step 3 should not reappear in step 5.
 3. **Per-step vs per-module conversations** if token cost proves too high.

@@ -100,61 +100,37 @@ Two things matter here:
   URL/title). After a click the model is blind until it asks. The loop has
   to make that explicit rather than assume the model sees the new page.
 
-### 6. `browser_hover` is a usable locator generator for assertions
+### 6. The `testing` capability emits whole assertions
 
-Since `browser_generate_locator` doesn't exist in 0.0.83, hovering the
-element whose text a step verifies harvests its locator as a side effect:
+**Correction to an earlier version of this document**, which claimed
+`browser_generate_locator` and `browser_verify_*` do not exist in 0.0.83.
+They do. `--help` lists only `vision, pdf, devtools` under `--caps`, but
+**`testing` is accepted and undocumented**:
 
-```python
-page.get_by_text("Your email or password is").hover()
-```
+| `--caps` | tools |
+|---|---|
+| *(none)* | 25 |
+| `testing` | 30 — adds `browser_generate_locator`, `browser_verify_element_visible`, `browser_verify_text_visible`, `browser_verify_value`, `browser_verify_list_visible` |
+| `vision,pdf,devtools` | 45 |
+| all four | 50 |
 
-Strip `.hover()`, wrap the rest in `expect(...).to_be_visible()`, and the
-assertion is *harvested* rather than composed. Caveat: Playwright's locator
-generator **truncated** the text ("Your email or password is", not the full
-"…is incorrect!"). It still resolves, since `get_by_text` is a substring
-match, but the assertion is weaker than the spec's wording.
-
-Also found: `browser_evaluate` ignores `--codegen python` and emits
-**JavaScript** (`await page.getByText('…').evaluate(...)`). It must stay
-off the allowlist, or JS will leak into a Python script.
-
-### 7. A live LLM drives the loop and self-heals — confirmed
-
-Run against the real Azure deployment (`gpt-5.5`), 11 allowlisted MCP tools
-exposed as function definitions, for the single step
-*"Click on the 'Signup / Login' button"*:
+The `browser_verify_*` tools execute the assertion against the live page
+**and emit it as Python**:
 
 ```
-turn 0  browser_find {"text": "Signup / Login"}            -> ref e23
-turn 1  browser_click {"target": "e23"}                    -> ERROR (overlay)
-turn 2  browser_find {"regex": "/Consent|Accept|Agree|…/i"} -> ref e851
-turn 3  browser_click {"target": "e851"}                   -> page.get_by_role("button", name="Consent").click()
-turn 4  browser_click {"target": "e23"}                    -> page.get_by_role("link", name=" Signup / Login").click()
-turn 5  step_done
+browser_verify_element_visible {"role": "heading", "accessibleName": "Login to your account"}
+→ expect(page.get_by_role("heading", name="Login to your account")).to_be_visible()
 ```
 
-Harvested result:
+So verification steps harvest exactly like action steps — no composed
+`expect(...)` wrapper, and no truncation problem. A failing verification
+returns `isError=True` with a terse reason (`Text not found`), the same
+recoverable signal a failed click gives.
 
-```python
-page.get_by_role("button", name="Consent").click()        # optional
-page.get_by_role("link", name=" Signup / Login").click()
-```
-
-Four things worked without being spoon-fed:
-
-- It **self-healed** from the overlay error — read the call log, went
-  looking for a consent button, dismissed it, retried.
-- It **excluded exploratory detours** — the failed click and both `find`
-  calls are absent from the harvested code.
-- It **marked the consent click `optional`** unprompted, with a correct
-  reason, which is exactly the guard the hand-written sample used.
-- **Azure accepted MCP's raw `input_schema`** once `$schema` and
-  `additionalProperties` were stripped. Nothing else needed rewriting.
-
-Caveat: `temperature=0` is rejected by this deployment ("Only the default
-(1) value is supported"). Note that `Extractor._extra_args()` currently
-hardcodes `temperature: 0.0` for Azure — it would 400 against `gpt-5.5`.
+`browser_generate_locator` is the exception: it returns **JavaScript**
+syntax (`getByRole('heading', { name: '...' })`) regardless of
+`--codegen python`, so it stays unused. `browser_evaluate` leaks JavaScript
+the same way. Both must stay off the allowlist.
 
 ## How to expose MCP to the LLM provider
 
@@ -181,7 +157,7 @@ It needs a second, tool-calling method returning structured tool calls, implemen
 per provider (Anthropic / OpenAI / Azure OpenAI) and scriptable in `MockProvider`
 so the suite still runs offline (non-functional req 7).
 
-## Tool surface in 0.0.83 (25 tools)
+## Tool surface (25 core tools, 30 with `--caps testing`)
 
 ```
 browser_navigate  browser_navigate_back  browser_click      browser_type
@@ -196,10 +172,9 @@ browser_close     browser_run_code_unsafe
 
 Notes:
 
-- **`browser_generate_locator` and `browser_verify_*` do not exist in
-  0.0.83.** They are on `main` and in the published docs, but unreleased.
-  The design must not depend on them.
-- `--caps` in 0.0.83 offers only `vision, pdf, devtools` — no `testing` cap.
+- The five `testing`-capability tools are listed in §6, not here.
+- `--help` under-reports `--caps`: it documents `vision, pdf, devtools`
+  but `testing` works. Do not trust `--help` as the capability list.
 - **Never expose `browser_run_code_unsafe`** — it is RCE-equivalent by
   Microsoft's own description. Allowlist the ~10 tools actually needed.
 
@@ -207,8 +182,10 @@ Notes:
 
 - **Node is not on the default WSL PATH.** `npx` resolves to the *Windows*
   binary under `/mnt/c` (11.13.0); the Linux one (nvm, v24.18.0, npx 11.18.0)
-  lives at `~/.nvm/versions/node/v24.18.0/bin`. The MCP command must be a
-  configurable absolute path, not a bare `npx`.
+  lives at `~/.nvm/versions/node/v24.18.0/bin`. This trap is why the design
+  connects to MCP over HTTP (`--port`) instead of spawning it — verified
+  working via the SDK's `streamable_http_client`, which removes the
+  question of which `npx` the app would have found.
 - **The MCP server needs its own browser.** It wants Node Playwright's
   chromium build (1247); the Python side has 1234/1243. Fix:
   `npx @playwright/mcp@0.0.83 install-browser chrome-for-testing`
@@ -216,8 +193,9 @@ Notes:
   binaries — relevant for the future Docker image.
 - Default browser is the `chrome` **channel**, which is not installed.
   Pass `--browser chromium`.
-- Pin the version (`@playwright/mcp@0.0.83`), never `@latest` — the tool
-  surface is moving fast (25 tools shipped vs 70+ on `main`).
+- The tool surface moves fast and varies by `--caps` (25 / 30 / 50).
+  Whatever version policy is chosen, validate the allowlist against
+  `list_tools()` at startup rather than assuming a tool is present.
 - Use `--isolated` so every run starts from a clean profile. With a
   persistent profile, consent accepted once would never reappear, the
   agent would never emit consent handling, and the fresh `pytest` run
