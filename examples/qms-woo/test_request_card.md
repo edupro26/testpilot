@@ -1,4 +1,4 @@
-# Request Card (20€//mês)
+# Request Card
 
 urls = ["https://qms.woo.pt/","https://qms.woo.pt/pedir-cartao-gratis-sim-esim"]
 
@@ -8,7 +8,7 @@ urls = ["https://qms.woo.pt/","https://qms.woo.pt/pedir-cartao-gratis-sim-esim"]
 2. Verify that the initial page is visible successfully
 3. Click on the 'Pedir cartão' button
 4. Verify the page is visible
-5. Select the option '20€//mês' by clicking the button 'Aderir já'
+5. Select the second '8€//mês' plan by clicking the 'Selecionar' button
 6. Verify that the text field with the placeholder 'O teu nome?' is visible
 7. Verify that the text field with the placeholder 'O teu email?' is visible
 8. Verify that the text field with the placeholder 'O teu nº de telemóvel?' is visible
