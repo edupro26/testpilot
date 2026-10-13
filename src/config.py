@@ -12,8 +12,6 @@ class LLMProviderName(StrEnum):
     """Supported values for the LLM_PROVIDER setting."""
 
     MOCK = "mock"
-    ANTHROPIC = "anthropic"
-    OPENAI = "openai"
     AZURE_OPENAI = "azure_openai"
 
 
@@ -24,17 +22,18 @@ class Settings(BaseSettings):
 
     llm_provider: LLMProviderName = LLMProviderName.MOCK
 
-    anthropic_api_key: str | None = None
-    anthropic_model: str | None = None
-
-    openai_api_key: str | None = None
-    openai_model: str | None = None
-
     azure_openai_endpoint: str | None = None
     azure_openai_api_key: str | None = None
     azure_deployment_name: str | None = None
     azure_model_name: str | None = None
     openai_api_version: str | None = None
+
+    # Shared by the MCP browser, the replay browser and the generated script,
+    # since sites localise by Accept-Language.
+    browser_locale: str = "en-US"
+
+    mcp_url: str = "http://localhost:8931/mcp"
+    mcp_max_turns: int = 25
 
     log_level: str = "INFO"
 
@@ -47,7 +46,7 @@ _LEVEL_COLORS = {
     logging.CRITICAL: "\033[1;31m",  # bold red
 }
 _COLOR_RESET = "\033[0m"
-_NOISY_LOGGERS = ("httpx", "httpcore", "httpcore2", "openai", "anthropic")
+_NOISY_LOGGERS = ("httpx", "httpcore", "httpcore2", "openai")
 _FMT = "[%(asctime)s] [%(levelname)s] %(message)s"
 
 
