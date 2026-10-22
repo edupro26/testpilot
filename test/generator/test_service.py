@@ -4,8 +4,11 @@ import pytest
 from src.exceptions import GeneratorError
 from src.generator.service import Generator
 from src.llm.provider.mock import MockProvider
-from src.model.enums import ElementType, IdentifierType
-from src.model.test_case import ExecutionStep, ExtractedData, Module, TestCase
+from src.model.test_case import ExecutionStep, Module, StepStatement, TestCase
+
+_CONSENT = 'page.get_by_role("button", name="Consent").click()'
+_CLICK = 'page.get_by_role("link", name="Signup / Login").click()'
+_ASSERT = 'expect(page.get_by_role("heading", name="Login")).to_be_visible()'
 
 _TEST_CASE = TestCase(
     name="Login User with Incorrect Credentials",
@@ -14,188 +17,143 @@ _TEST_CASE = TestCase(
             url="https://automationexercise.com",
             description="Home page",
             execution_steps=[
-                ExecutionStep(step="Navigate to the home page"),
                 ExecutionStep(
-                    step="Click the 'Signup / Login' button",
-                    extracted_data=[
-                        ExtractedData(
-                            type=ElementType.LINK,
-                            request_description="The Signup / Login link",
-                            identifier_type=IdentifierType.CSS,
-                            identifier_tracking="a[href*='login']",
-                        )
+                    step="Navigate and open the login page",
+                    statements=[
+                        StepStatement(code=_CONSENT),
+                        StepStatement(code=_CLICK),
                     ],
                 ),
-            ],
-        ),
-        Module(
-            url="https://automationexercise.com/login",
-            description="Login page, reached via the previous module's click",
-            execution_steps=[
+                ExecutionStep(step="Observe the page", statements=[]),
                 ExecutionStep(
-                    step="Click the Login button",
-                    extracted_data=[
-                        ExtractedData(
-                            type=ElementType.BUTTON,
-                            request_description="The Login button",
-                            identifier_type=IdentifierType.CSS,
-                            identifier_tracking="[data-qa='login-button']",
-                        )
-                    ],
-                )
+                    step="Verify the login section is visible",
+                    statements=[StepStatement(code=_ASSERT)],
+                ),
             ],
-        ),
+        )
     ],
 )
 
-_VALID_SCRIPT = (
-    "from playwright.sync_api import Page, expect\n\n\n"
-    "def test_login_user_with_incorrect_credentials(page: Page) -> None:\n"
-    "    # MODULE 0\n"
-    '    page.goto("https://automationexercise.com")\n'
-    "    page.locator(\"css=a[href*='login']\").click()\n"
-    "    # MODULE 1\n"
-    "    page.locator(\"css=[data-qa='login-button']\").click()\n"
-)
 
-
-def test_run_returns_script_with_its_test_function() -> None:
-    """A well-formed script response is returned with its test function."""
-    generator = Generator(MockProvider(_VALID_SCRIPT))
-
-    result = generator.run(_TEST_CASE)
-
-    assert "def test_login_user_with_incorrect_credentials" in result
-
-
-def test_run_produces_syntactically_valid_python() -> None:
-    """The injected result still compiles as a Python module."""
-    generator = Generator(MockProvider(_VALID_SCRIPT))
-
-    result = generator.run(_TEST_CASE)
-
-    compile(result, "<generated>", "exec")
-
-
-def test_run_dismisses_overlays_once_per_module_after_its_page_loads() -> None:
-    """Each module gets exactly one dismissal call, placed after its own goto."""
-    generator = Generator(MockProvider(_VALID_SCRIPT))
-
-    result = generator.run(_TEST_CASE)
-
-    assert result.count("_dismiss_overlays(page)") == 2
-    assert "def _dismiss_overlays(page: Page) -> None:" in result
-    goto_index = result.index('page.goto("https://automationexercise.com")')
-    first_dismissal = result.index("_dismiss_overlays(page)", goto_index)
-    assert result[goto_index:first_dismissal].count("\n") == 1  # right after goto
-    assert "# MODULE" not in result
-
-
-def test_run_dismisses_overlays_after_goto_even_with_a_blank_line_between() -> None:
-    """A blank line between the marker and its goto doesn't break the anchor.
-
-    The prompt forbids this, but the LLM isn't trusted to always comply --
-    dismissal must still land after navigation, not before it.
-    """
-    spaced_script = (
-        "from playwright.sync_api import Page, expect\n\n\n"
-        "def test_login_user_with_incorrect_credentials(page: Page) -> None:\n"
-        "    # MODULE 0\n"
+def _script(locale: str = "en-US", body: str | None = None) -> str:
+    """A well-formed script, as the LLM is asked to write it."""
+    body = body or (
+        "    # Navigate and open the login page\n"
+        f"    {_CONSENT}\n"
+        f"    {_CLICK}\n"
         "\n"
-        '    page.goto("https://automationexercise.com")\n'
-        "    page.locator(\"css=a[href*='login']\").click()\n"
-        "    # MODULE 1\n"
-        "    page.locator(\"css=[data-qa='login-button']\").click()\n"
+        "    # Observe the page\n"
+        "    # (no browser interaction required)\n"
+        "\n"
+        "    # Verify the login section is visible\n"
+        f"    {_ASSERT}\n"
     )
-    generator = Generator(MockProvider(spaced_script))
-
-    result = generator.run(_TEST_CASE)
-
-    goto_index = result.index('page.goto("https://automationexercise.com")')
-    first_dismissal = result.index("_dismiss_overlays(page)", goto_index)
-    assert result[goto_index:first_dismissal].count("\n") == 1  # right after goto
-
-
-def test_run_dismisses_overlays_for_a_module_reached_only_via_a_click() -> None:
-    """A module with no page.goto() of its own still gets a dismissal call."""
-    generator = Generator(MockProvider(_VALID_SCRIPT))
-
-    result = generator.run(_TEST_CASE)
-
-    login_click_index = result.index("css=a[href*='login']")
-    login_button_index = result.index("css=[data-qa='login-button']")
-    second_dismissal = result.index("_dismiss_overlays(page)", login_click_index)
-    assert login_click_index < second_dismissal < login_button_index
-
-
-def test_run_strips_markdown_code_fence() -> None:
-    """A response wrapped in a ```python fence has the fence stripped."""
-    fenced = f"```python\n{_VALID_SCRIPT}```"
-    generator = Generator(MockProvider(fenced))
-
-    result = generator.run(_TEST_CASE)
-
-    assert not result.startswith("```")
-    assert not result.endswith("```")
-
-
-def test_run_raises_generator_error_for_empty_response() -> None:
-    """An empty LLM response raises GeneratorError."""
-    generator = Generator(MockProvider(""))
-
-    with pytest.raises(GeneratorError, match="empty"):
-        generator.run(_TEST_CASE)
-
-
-def test_run_raises_generator_error_when_no_test_function_found() -> None:
-    """A response with no 'def test_' function raises GeneratorError."""
-    generator = Generator(MockProvider("print('not a test')"))
-
-    with pytest.raises(GeneratorError, match="does not look like a test script"):
-        generator.run(_TEST_CASE)
-
-
-def test_run_raises_generator_error_when_a_module_marker_is_missing() -> None:
-    """A script missing one module's marker raises GeneratorError, not a bad script."""
-    missing_marker = (
-        "from playwright.sync_api import Page, expect\n\n\n"
-        "def test_login_user_with_incorrect_credentials(page: Page) -> None:\n"
-        "    # MODULE 0\n"
-        '    page.goto("https://automationexercise.com")\n'
-        "    page.locator(\"css=[data-qa='login-button']\").click()\n"
+    return (
+        '"""Login with incorrect credentials."""\n'
+        "\n"
+        "import pytest\n"
+        "from playwright.sync_api import Page, expect\n"
+        "\n"
+        "\n"
+        '@pytest.fixture(scope="session")\n'
+        "def browser_context_args(browser_context_args: dict) -> dict:\n"
+        '    """Pin the locale these locators were validated under."""\n'
+        f'    return {{**browser_context_args, "locale": "{locale}"}}\n'
+        "\n"
+        "\n"
+        "def test_login_with_incorrect_credentials(page: Page) -> None:\n"
+        '    """Log in with a wrong password and see the login section."""\n'
+        f"{body}"
     )
-    generator = Generator(MockProvider(missing_marker))
-
-    with pytest.raises(GeneratorError, match="MODULE"):
-        generator.run(_TEST_CASE)
 
 
-def test_run_raises_generator_error_when_markers_are_out_of_order() -> None:
-    """Markers out of order (e.g. duplicated 0) raise GeneratorError."""
-    duplicated_marker = (
-        "from playwright.sync_api import Page, expect\n\n\n"
-        "def test_login_user_with_incorrect_credentials(page: Page) -> None:\n"
-        "    # MODULE 0\n"
-        '    page.goto("https://automationexercise.com")\n'
-        "    # MODULE 0\n"
-        "    page.locator(\"css=[data-qa='login-button']\").click()\n"
+def test_returns_the_llm_script() -> None:
+    """The LLM assembles the file; a well-formed one is returned as is."""
+    script = Generator(MockProvider(_script())).run(_TEST_CASE)
+
+    assert script == _script()
+    compile(script, "<generated>", "exec")
+
+
+def test_the_prompt_carries_the_steps_statements_and_fixture() -> None:
+    """The LLM needs every validated piece, verbatim, to assemble the file."""
+    seen: dict[str, str] = {}
+
+    def capture(_system: str, user: str) -> str:
+        seen["prompt"] = user
+        return _script(locale="pt-PT")
+
+    Generator(MockProvider(capture), locale="pt-PT").run(_TEST_CASE)
+
+    prompt = seen["prompt"]
+    for step in _TEST_CASE.modules[0].execution_steps:
+        assert f"STEP: {step.step}" in prompt
+    for code in (_CONSENT, _CLICK, _ASSERT):
+        assert code in prompt
+    assert "(no statements)" in prompt
+    assert "def browser_context_args" in prompt
+    assert '"locale": "pt-PT"' in prompt
+
+
+def test_a_fenced_reply_is_unwrapped() -> None:
+    """A Markdown fence around the code must not end up in the file."""
+    fenced = f"```python\n{_script()}```"
+
+    assert Generator(MockProvider(fenced)).run(_TEST_CASE) == _script()
+
+
+def test_a_dropped_statement_is_rejected() -> None:
+    """What was validated is what ships, or the run fails."""
+    body = f"    {_CONSENT}\n    {_ASSERT}\n"
+
+    with pytest.raises(GeneratorError, match="Signup / Login"):
+        Generator(MockProvider(_script(body=body))).run(_TEST_CASE)
+
+
+def test_an_altered_statement_is_rejected() -> None:
+    """Even a small edit means the shipped line was never validated."""
+    body = (
+        f"    {_CONSENT}\n"
+        f"    {_CLICK.replace('.click()', '.click(force=True)')}\n"
+        f"    {_ASSERT}\n"
     )
-    generator = Generator(MockProvider(duplicated_marker))
 
-    with pytest.raises(GeneratorError, match="MODULE"):
-        generator.run(_TEST_CASE)
+    with pytest.raises(GeneratorError, match="altered"):
+        Generator(MockProvider(_script(body=body))).run(_TEST_CASE)
 
 
-def test_run_includes_test_case_json_in_the_prompt() -> None:
-    """The rendered prompt includes the test case's JSON."""
-    captured_prompts = []
+def test_reordered_statements_are_rejected() -> None:
+    """Statements depend on each other, so their order is part of the proof."""
+    body = f"    {_CLICK}\n    {_CONSENT}\n    {_ASSERT}\n"
 
-    def _capture(_system_prompt: str, user_prompt: str) -> str:
-        captured_prompts.append(user_prompt)
-        return _VALID_SCRIPT
+    with pytest.raises(GeneratorError):
+        Generator(MockProvider(_script(body=body))).run(_TEST_CASE)
 
-    generator = Generator(MockProvider(_capture))
 
-    generator.run(_TEST_CASE)
+def test_a_missing_or_changed_fixture_is_rejected() -> None:
+    """The locale fixture is what makes the locators reproduce at run time."""
+    with pytest.raises(GeneratorError, match="en-US"):
+        Generator(MockProvider(_script(locale="pt-PT"))).run(_TEST_CASE)
 
-    assert _TEST_CASE.name in captured_prompts[0]
+
+def test_a_script_that_does_not_compile_is_rejected() -> None:
+    """A broken file must fail here, not later under pytest."""
+    with pytest.raises(GeneratorError, match="does not compile"):
+        Generator(MockProvider(_script() + "def broken(:\n")).run(_TEST_CASE)
+
+
+def test_rejects_a_test_case_with_no_statements() -> None:
+    """An empty script would pass pytest while testing nothing."""
+    empty = TestCase(
+        name="Empty",
+        modules=[
+            Module(
+                url="https://example.com",
+                description="d",
+                execution_steps=[ExecutionStep(step="Do nothing")],
+            )
+        ],
+    )
+
+    with pytest.raises(GeneratorError, match="no validated statements"):
+        Generator(MockProvider(_script())).run(empty)
