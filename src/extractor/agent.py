@@ -197,14 +197,15 @@ class StepAgent:
         statements = []
         for claimed in done.statements:
             code = claimed.code.strip()
-            require_python(code, step)
             if code not in allowed:
                 raise ExtractorError(
-                    f"Step {step!r} reported a statement Playwright MCP never "
-                    f"ran, so it has not been proven against a live page:\n"
+                    f"Step {step!r} reported a statement that no collectable "
+                    f"Playwright MCP tool emitted, so it was never run or cannot "
+                    f"be written into the script:\n"
                     f"  claimed:  {code}\n"
                     f"  emitted:  {', '.join(sorted(allowed)) or '(nothing)'}"
                 )
+            require_python(code, step)
             statements.append(StepStatement(code=code))
 
         logger.info("Collected %d statement(s)", len(statements))

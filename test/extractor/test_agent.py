@@ -48,7 +48,7 @@ def test_rejects_a_statement_mcp_never_ran() -> None:
         ]
     )
 
-    with pytest.raises(ExtractorError, match="never"):
+    with pytest.raises(ExtractorError, match="no collectable"):
         StepAgent(llm, mcp).run("Click Signup / Login", context="fresh")
 
 
@@ -177,7 +177,7 @@ def test_code_from_a_non_collectable_tool_cannot_become_a_statement() -> None:
         ]
     )
 
-    with pytest.raises(ExtractorError):
+    with pytest.raises(ExtractorError, match="no collectable"):
         StepAgent(llm, mcp).run("Press Tab", context="fresh")
 
 
@@ -227,5 +227,5 @@ def test_a_shortened_assertion_is_collected_as_emitted() -> None:
     assert [s.code for s in accepted.run("Verify the error", context="x")] == [short]
 
     rejected = StepAgent(MockProvider(turns=[verify, _done(_statement(widened))]), mcp)
-    with pytest.raises(ExtractorError, match="never"):
+    with pytest.raises(ExtractorError, match="no collectable"):
         rejected.run("Verify the error", context="x")

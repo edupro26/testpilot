@@ -34,6 +34,11 @@ reject it for:
 - scoping a locator more narrowly than seems necessary;
 - an accessible name carrying odd whitespace or icon characters;
 - including the dismissal of a cookie banner or other popup;
+- a text or accessible-name locator that is a shortened prefix of the text
+    the step quotes (for example `get_by_text("Your email or password is")`
+    for "Your email or password is incorrect!"). Playwright shortens long
+    text in the locators it generates, and the full text was already checked
+    against the live page when this code was produced;
 - being shorter than you expected, when it still does the job.
 
 OUTPUT SCHEMA
