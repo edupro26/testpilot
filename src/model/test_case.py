@@ -27,10 +27,7 @@ class ExecutionStep(BaseModel):
 
 
 class Module(BaseModel):
-    """A page the test case interacts with, and the steps performed on it.
-
-    From Level 2 on, `url` is advisory: navigation is a harvested statement.
-    """
+    """A page the test case interacts with, and the steps performed on it."""
 
     url: str
     description: str
