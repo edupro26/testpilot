@@ -1,4 +1,8 @@
-"""Validator service: verify extracted element identifiers against page HTML."""
+"""Validator service: prove a step's statements, then judge what they test.
+
+1. Replay (deterministic): does the code run against a live page?
+2. Semantic (one LLM call): does it test what the step asked?
+"""
 
 import json
 import logging
@@ -7,85 +11,103 @@ from pydantic import BaseModel, Field, ValidationError
 
 from src.exceptions import ValidatorError
 from src.llm.protocol import LLMProvider
-from src.model.test_case import ExtractedData, Module
+from src.model.test_case import StepStatement
 from src.prompt_loader import render_prompt
-from src.validator.uniqueness import count_dom_matches, element_type_is_plausible
+from src.validator.browser import BrowserError, ValidationBrowser
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = "You are an expert QA automation engineer."
 
 
-class IdentifierVerdict(BaseModel):
-    """Validation outcome for a single extracted identifier."""
+class StepVerdict(BaseModel):
+    """The outcome of validating one execution step.
 
-    identifier_tracking: str
+    `statements` are the accepted statements with their `reason` filled in;
+    empty when the step is rejected.
+    """
+
     is_valid: bool
-    reason: str
-
-
-class ValidationResult(BaseModel):
-    """Aggregate validation outcome for one module's extracted data."""
-
-    verdicts: list[IdentifierVerdict] = Field(default_factory=list)
-
-    @property
-    def is_valid(self) -> bool:
-        """Whether every extracted identifier validated successfully."""
-        return all(verdict.is_valid for verdict in self.verdicts)
+    reason: str = ""
+    statements: list[StepStatement] = Field(default_factory=list)
 
     @property
     def feedback(self) -> str:
-        """Feedback listing every failed identifier's reason, for a retry.
+        """Why the step was rejected, for the Extractor's retry."""
+        return "" if self.is_valid else self.reason
 
-        Empty when every identifier validated successfully.
-        """
-        failures = [verdict for verdict in self.verdicts if not verdict.is_valid]
-        return "\n".join(f"- {v.identifier_tracking}: {v.reason}" for v in failures)
+
+class _SemanticVerdict(BaseModel):
+    """The semantic check's JSON reply."""
+
+    is_valid: bool
+    reason: str = ""
+    statement_reasons: list[str] = Field(default_factory=list)
 
 
 class Validator:
-    """Verifies extracted element identifiers against the crawled HTML."""
+    """Proves a step's statements against a live page, then judges them."""
 
-    def __init__(self, llm: LLMProvider) -> None:
-        """Initialize with the LLM provider to use.
+    def __init__(self, llm: LLMProvider, browser: ValidationBrowser) -> None:
+        """Initialize with the LLM provider and validation browser to use.
 
         Args:
-            llm: The LLM provider used to perform the validation.
+            llm: Performs the semantic judgement.
+            browser: The cumulative validation browser, shared across the run.
         """
         self._llm = llm
+        self._browser = browser
 
-    def run(self, module: Module, html_by_step: list[str]) -> ValidationResult:
-        """Validate every extracted identifier in `module` against its HTML.
+    def run(self, step: str, statements: list[StepStatement]) -> StepVerdict:
+        """Validate one step's statements.
 
         Args:
-            module: The module, already augmented with extracted identifiers
-                by the Extractor.
-            html_by_step: The HTML each step's identifiers were extracted
-                from, one entry per step (usually all the same snapshot).
+            step: The execution step's text.
+            statements: The statements collected for it.
 
         Returns:
-            One verdict per extracted identifier. A module with none
-            validates trivially, with no LLM call made.
+            The verdict. A step with no statements is trivially valid.
 
         Raises:
-            ValidatorError: If the LLM response isn't valid JSON, doesn't
-                match the expected shape, or has the wrong number of verdicts.
+            ValidatorError: If the LLM response is not valid JSON or does
+                not match the expected shape.
         """
-        indexed_identifiers = _flatten_identifiers(module)
-        if not indexed_identifiers:
-            logger.info("No extracted data to validate for %s", module.url)
-            return ValidationResult()
+        if not statements:
+            logger.info("Step has no statements to validate")
+            return StepVerdict(is_valid=True, reason="no browser interaction needed")
 
-        logger.info(
-            "Validating %d extracted identifier(s) for %s",
-            len(indexed_identifiers),
-            module.url,
-        )
+        logger.info("Replaying %d statement(s)", len(statements))
+        try:
+            self._browser.run(statements)
+        except BrowserError as failure:
+            logger.warning("Replay failed: %s", failure.code)
+            preceding = (
+                ""
+                if not failure.ran
+                else (
+                    "\nThese statements ran first, without error:\n"
+                    + "\n".join(failure.ran)
+                    + "\n"
+                )
+            )
+            return StepVerdict(
+                is_valid=False,
+                reason=(
+                    f"This statement failed when replayed in a clean browser:\n"
+                    f"{failure.code}\n{failure.reason}\n{preceding}"
+                ),
+            )
+
+        return self._judge(step, statements)
+
+    def _judge(self, step: str, statements: list[StepStatement]) -> StepVerdict:
+        """Ask the LLM whether the proven code does what the step asked."""
         prompt = render_prompt(
             "validator",
-            module_json=module.model_dump_json(indent=2),
-            html=_render_html_sections(html_by_step),
+            step=step,
+            code=_number(statements),
+            page_url=self._browser.page.url,
+            page_title=self._browser.page.title(),
         )
         response = self._llm.complete(
             system_prompt=_SYSTEM_PROMPT, user_prompt=prompt, json_mode=True
@@ -98,100 +120,42 @@ class Validator:
             raise ValidatorError(f"LLM response was not valid JSON: {exc}") from exc
 
         try:
-            result = ValidationResult.model_validate(data)
+            semantic = _SemanticVerdict.model_validate(data)
         except ValidationError as exc:
             raise ValidatorError(
-                f"LLM response did not match the ValidationResult shape: {exc}"
+                f"LLM response did not match the verdict shape: {exc}"
             ) from exc
 
-        if len(result.verdicts) != len(indexed_identifiers):
-            raise ValidatorError(
-                f"LLM returned {len(result.verdicts)} verdict(s) but module "
-                f"has {len(indexed_identifiers)} extracted identifier(s)"
-            )
-        result = _apply_deterministic_vetoes(result, indexed_identifiers, html_by_step)
-
         logger.info(
-            "Validation for %s: %s (%d verdict(s))",
-            module.url,
-            "passed" if result.is_valid else "failed",
-            len(result.verdicts),
+            "Semantic check: %s%s",
+            "passed" if semantic.is_valid else "failed",
+            "" if semantic.is_valid else f" ({semantic.reason})",
         )
-        return result
+        if not semantic.is_valid:
+            return StepVerdict(is_valid=False, reason=semantic.reason)
 
-
-def _flatten_identifiers(module: Module) -> list[tuple[int, ExtractedData]]:
-    """Return every extracted identifier in `module`, paired with its step index."""
-    return [
-        (step_index, data)
-        for step_index, step in enumerate(module.execution_steps)
-        for data in step.extracted_data
-    ]
-
-
-def _render_html_sections(html_by_step: list[str]) -> str:
-    """Render `html_by_step` for the validator prompt's single `{html}` slot.
-
-    Collapses to the one snapshot when every step used the same HTML;
-    otherwise labels and concatenates each distinct snapshot.
-    """
-    distinct = list(dict.fromkeys(html_by_step))
-    if len(distinct) == 1:
-        return distinct[0]
-    return "\n\n".join(
-        f"<!-- Page HTML snapshot {index} -->\n{html}"
-        for index, html in enumerate(distinct)
-    )
-
-
-def _apply_deterministic_vetoes(
-    result: ValidationResult,
-    indexed_identifiers: list[tuple[int, ExtractedData]],
-    html_by_step: list[str],
-) -> ValidationResult:
-    """Veto any LLM-approved verdict that fails a deterministic DOM check.
-
-    Two checks against the identifier's own HTML: uniqueness (exactly 1
-    match), then -- only if unique -- whether the element's tag/role
-    plausibly matches its claimed `ElementType`. Both only flip valid ->
-    invalid, never the reverse. Also re-keys each verdict's
-    `identifier_tracking` to the module's ground truth, since matching here
-    is positional, not by the LLM's echoed string.
-    """
-    verdicts = []
-    for (step_index, identifier), verdict in zip(
-        indexed_identifiers, result.verdicts, strict=True
-    ):
-        html = html_by_step[step_index]
-        updates = {"identifier_tracking": identifier.identifier_tracking}
-        if verdict.is_valid:
-            count = count_dom_matches(
-                html, identifier.identifier_type, identifier.identifier_tracking
+        reasons = semantic.statement_reasons
+        if len(reasons) != len(statements):
+            logger.warning(
+                "Got %d statement reason(s) for %d statement(s), using the "
+                "step's reason for each",
+                len(reasons),
+                len(statements),
             )
-            if count == 0:
-                updates["is_valid"] = False
-                updates["reason"] = (
-                    "resolves to 0 elements in the page HTML (expected "
-                    "exactly 1); pick a different selector or attribute"
-                )
-            elif count > 1:
-                updates["is_valid"] = False
-                updates["reason"] = (
-                    f"resolves to {count} elements in the page HTML "
-                    "(expected exactly 1); choose a selector unique to a "
-                    "single element, or leave this step's extracted_data "
-                    "empty if none exists"
-                )
-            elif not element_type_is_plausible(
-                html,
-                identifier.identifier_type,
-                identifier.identifier_tracking,
-                identifier.type,
-            ):
-                updates["is_valid"] = False
-                updates["reason"] = (
-                    "resolves to an element whose tag/role doesn't match "
-                    f"its claimed type '{identifier.type}'"
-                )
-        verdicts.append(verdict.model_copy(update=updates))
-    return ValidationResult(verdicts=verdicts)
+            reasons = [semantic.reason] * len(statements)
+        return StepVerdict(
+            is_valid=True,
+            reason=semantic.reason,
+            statements=[
+                statement.model_copy(update={"reason": reason})
+                for statement, reason in zip(statements, reasons, strict=True)
+            ],
+        )
+
+
+def _number(statements: list[StepStatement]) -> str:
+    """Render `statements` as a numbered list, one line per statement."""
+    return "\n".join(
+        f"{number}. {statement.code}"
+        for number, statement in enumerate(statements, start=1)
+    )

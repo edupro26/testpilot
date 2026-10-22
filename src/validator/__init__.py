@@ -1,1 +1,1 @@
-"""Level 2: verify extracted element identifiers against the crawled HTML."""
+"""Level 2: prove each step's statements in a live browser, then judge them."""

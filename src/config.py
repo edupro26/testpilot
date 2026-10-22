@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     azure_model_name: str | None = None
     openai_api_version: str | None = None
 
-    # Shared by the MCP browser, the replay browser and the generated script,
+    # Shared by the MCP browser, the validation browser and the generated script,
     # since sites localise by Accept-Language.
     browser_locale: str = "en-US"
 
