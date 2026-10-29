@@ -1,4 +1,4 @@
-"""Structurer service: markdown test case -> Level 1 TestCase."""
+"""Structurer service: markdown test case -> structured TestCase."""
 
 import json
 import logging

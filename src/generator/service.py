@@ -22,7 +22,7 @@ def browser_context_args(browser_context_args: dict) -> dict:
 
 
 class Generator:
-    """Assembles a validated Level 2 TestCase into an executable script."""
+    """Assembles a validated TestCase into an executable script."""
 
     def __init__(self, llm: LLMProvider, *, locale: str = "en-US") -> None:
         """Initialize with the LLM provider to use.
@@ -39,7 +39,7 @@ class Generator:
         """Assemble `test_case` into an executable Playwright test script.
 
         Args:
-            test_case: The fully validated Level 2 test case.
+            test_case: The fully validated test case.
 
         Returns:
             The generated script source.

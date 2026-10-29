@@ -1,8 +1,8 @@
-"""The test case JSON contract, shared across Level 1 and Level 2.
+"""The test case JSON contract, shared across the pipeline stages.
 
-Level 1 and Level 2 aren't separate schemas -- they differ only in whether
-`statements` has been filled in yet (empty from the Structurer, populated
-by the Extractor and proven by the Validator).
+The structured and validated test cases aren't separate schemas -- they
+differ only in whether `statements` has been filled in yet (empty from the
+Structurer, populated by the Extractor and proven by the Validator).
 """
 
 from pydantic import BaseModel, Field

@@ -197,10 +197,10 @@ def test_cli_runs_the_full_pipeline_offline(
 
 
 @pytest.mark.usefixtures("isolated_settings_env")
-def test_a_generation_failure_keeps_the_level_2_json(
+def test_a_generation_failure_keeps_the_validated_json(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    """Level 2 is the expensive part, so it is on disk before generation."""
+    """Validation is the expensive part, so its JSON is on disk before generation."""
     result, output_dir = _run_cli(mocker, tmp_path, "not a script at all")
 
     assert result.exit_code == 1

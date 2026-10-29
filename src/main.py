@@ -33,7 +33,7 @@ _MarkdownPath = Annotated[
 def run(markdown_path: _MarkdownPath) -> None:
     """Run the full pipeline on a markdown test case and persist its output.
 
-    Writes the Level 2 JSON and the generated script to
+    Writes the validated test case JSON and the generated script to
     `output/<parent folder>/<stem>.{json,py}`. Needs a Playwright MCP server
     at MCP_URL.
     """
@@ -69,10 +69,10 @@ def run(markdown_path: _MarkdownPath) -> None:
 def _extract_and_validate(
     test_case: TestCase, llm: LLMProvider, settings: Settings
 ) -> TestCase:
-    """Run Level 2 over every module, sharing one MCP and one validation browser.
+    """Extract and validate every module, sharing one MCP and one validation browser.
 
     Args:
-        test_case: The Level 1 test case.
+        test_case: The structured test case.
         llm: The LLM provider.
         settings: Application settings, for MCP_URL and MCP_MAX_TURNS.
 

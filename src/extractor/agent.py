@@ -104,7 +104,7 @@ class StepAgent:
         """Perform `step` in the live browser and return its statements.
 
         Args:
-            step: The execution step's text, from the Level 1 JSON.
+            step: The execution step's text, from the structured test case.
             context: What the browser is already showing, and what earlier
                 steps have established.
             feedback: Why the previous attempt at this step was rejected.

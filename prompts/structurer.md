@@ -1,5 +1,5 @@
 You are an expert QA automation engineer. Convert the test case specification
-below into the Level 1 JSON structure used by this pipeline, splitting it
+below into the JSON structure used by this pipeline, splitting it
 into one module per web page.
 
 OBJECTIVE
