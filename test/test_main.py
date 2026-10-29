@@ -18,6 +18,7 @@ from src.validator.service import StepVerdict, Validator
 from typer.testing import CliRunner, Result
 
 _CLICK = 'page.get_by_role("button", name="Login").click()'
+_ASSERT = 'expect(page.get_by_text("Welcome")).to_be_visible()'
 
 _MODULE = Module(
     url="https://example.com/login",
@@ -38,33 +39,43 @@ def _browsers() -> tuple[MagicMock, MagicMock]:
     return mcp, browser
 
 
-def test_a_step_that_validates_first_time_is_not_retried() -> None:
-    """The happy path must cost exactly one agent loop."""
+def test_a_step_that_validates_first_time_costs_one_loop_and_no_reset() -> None:
+    """The happy path: one agent loop, and no reconnect or page reload."""
     extractor = MagicMock(spec=Extractor)
     extractor.run_step.return_value = _statements()
     accepted = [StepStatement(code=_CLICK, reason="clicks the login button")]
     validator = MagicMock(spec=Validator)
     validator.run.return_value = StepVerdict(is_valid=True, statements=accepted)
+    mcp, browser = _browsers()
 
-    result = _extract_step(_MODULE, 0, extractor, validator, *_browsers(), [])
+    result = _extract_step(_MODULE, 0, extractor, validator, mcp, browser, [])
 
     assert result == accepted
     assert extractor.run_step.call_count == 1
+    mcp.reset.assert_not_called()
+    browser.reset.assert_not_called()
 
 
-def test_a_rejected_step_retries_once_with_the_feedback() -> None:
-    """A blind retry would be worthless -- the rejection must be threaded in."""
+def test_a_rejected_step_resets_both_browsers_and_retries_with_feedback() -> None:
+    """A blind retry, or one against the failed attempt's state, is worthless.
+
+    Both browsers are reset (the MCP one would otherwise still carry, say, an
+    accepted cookie banner), the validated prefix is replayed, and the
+    rejection reaches the agent.
+    """
     extractor = MagicMock(spec=Extractor)
     second = _statements('page.get_by_role("button", name="Sign in").click()')
     extractor.run_step.side_effect = [_statements(), second]
-    rejection = StepVerdict(is_valid=False, reason="clicked the wrong button")
+    rejection = StepVerdict(is_valid=False, reason="cookie banner blocked the click")
     validator = MagicMock(spec=Validator)
     validator.run.side_effect = [
         rejection,
         StepVerdict(is_valid=True, statements=second),
     ]
+    mcp, browser = _browsers()
+    history = ['page.goto("https://example.com")']
 
-    result = _extract_step(_MODULE, 0, extractor, validator, *_browsers(), [])
+    result = _extract_step(_MODULE, 0, extractor, validator, mcp, browser, history)
 
     assert result == second
     assert extractor.run_step.call_count == 2
@@ -72,14 +83,21 @@ def test_a_rejected_step_retries_once_with_the_feedback() -> None:
     assert retry["feedback"] == rejection.feedback
     assert retry["reset_to"] == "https://example.com/login"
 
+    mcp.reset.assert_called_once()
+    browser.reset.assert_called_once()
+    mcp.call_tool.assert_called_once_with(
+        "browser_navigate", {"url": "https://example.com/login"}
+    )
+    replayed = browser.run.call_args[0][0]
+    assert [s.code for s in replayed] == history
+
 
 def test_a_step_failing_twice_aborts_the_run() -> None:
     """Functional req 10: retry once, then stop with a clear error."""
     extractor = MagicMock(spec=Extractor)
     extractor.run_step.return_value = _statements()
-    rejection = StepVerdict(is_valid=False, reason="still wrong")
     validator = MagicMock(spec=Validator)
-    validator.run.return_value = rejection
+    validator.run.return_value = StepVerdict(is_valid=False, reason="still wrong")
 
     with pytest.raises(ValidatorError, match="after retry") as excinfo:
         _extract_step(_MODULE, 0, extractor, validator, *_browsers(), [])
@@ -117,7 +135,7 @@ def test_invalid_configuration_fails_before_any_llm_call(
 _SMOKE_SCRIPT = f"""\"\"\"Smoke test.\"\"\"
 
 import pytest
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 
 
 @pytest.fixture(scope="session")
@@ -127,9 +145,12 @@ def browser_context_args(browser_context_args: dict) -> dict:
 
 
 def test_smoke_test(page: Page) -> None:
-    \"\"\"Click the login button.\"\"\"
+    \"\"\"Log in and see the welcome message.\"\"\"
     # Click the login button
     {_CLICK}
+
+    # Verify the welcome message
+    {_ASSERT}
 """
 
 
@@ -139,7 +160,7 @@ def _run_cli(
     """Run the CLI offline: MCP, the browser and the extractor are faked."""
     markdown_path = tmp_path / "automation" / "case.md"
     markdown_path.parent.mkdir()
-    markdown_path.write_text("# Smoke test\n\nClick the login button.")
+    markdown_path.write_text("# Smoke test\n\nClick login, see the welcome.")
 
     structurer_json = json.dumps(
         {
@@ -148,18 +169,16 @@ def _run_cli(
                 {
                     "url": "https://example.com",
                     "description": "Home page",
-                    "execution_steps": [{"step": "Click the login button"}],
+                    "execution_steps": [
+                        {"step": "Click the login button"},
+                        {"step": "Verify the welcome message"},
+                    ],
                 }
             ],
         }
     )
-    responses = iter(
-        [
-            structurer_json,
-            json.dumps({"is_valid": True, "reason": "ok"}),
-            generator_reply,
-        ]
-    )
+    verdict = json.dumps({"is_valid": True, "reason": "ok"})
+    responses = iter([structurer_json, verdict, verdict, generator_reply])
 
     mocker.patch(
         "src.main.get_llm_provider",
@@ -168,7 +187,10 @@ def _run_cli(
     mocker.patch("src.main.PlaywrightMCP")
     mocker.patch("src.main.ValidationBrowser")
     extractor = mocker.patch("src.main.Extractor")
-    extractor.return_value.run_step.return_value = _statements()
+    extractor.return_value.run_step.side_effect = [
+        _statements(_CLICK),
+        _statements(_ASSERT),
+    ]
 
     result = CliRunner().invoke(app, [str(markdown_path)])
     return result, tmp_path / "output" / "automation"
@@ -181,7 +203,8 @@ def test_cli_runs_the_full_pipeline_offline(
     """The CLI runs end to end and writes both artifacts, with no network.
 
     MCP and the validation browser are both faked, so this exercises the real
-    wiring without a server (non-functional req 7).
+    wiring without a server (non-functional req 7). Each step's statements
+    must land on that step in the persisted JSON.
     """
     result, output_dir = _run_cli(mocker, tmp_path, _SMOKE_SCRIPT)
 
@@ -189,11 +212,14 @@ def test_cli_runs_the_full_pipeline_offline(
 
     script = (output_dir / "case.py").read_text(encoding="utf-8")
     assert _CLICK in script
-    assert "def test_smoke_test(page: Page)" in script
+    assert _ASSERT in script
 
     persisted = json.loads((output_dir / "case.json").read_text(encoding="utf-8"))
-    statements = persisted["modules"][0]["execution_steps"][0]["statements"]
-    assert statements[0]["code"] == _CLICK
+    steps = persisted["modules"][0]["execution_steps"]
+    assert [[s["code"] for s in step["statements"]] for step in steps] == [
+        [_CLICK],
+        [_ASSERT],
+    ]
 
 
 @pytest.mark.usefixtures("isolated_settings_env")
@@ -206,60 +232,3 @@ def test_a_generation_failure_keeps_the_validated_json(
     assert result.exit_code == 1
     assert (output_dir / "case.json").exists()
     assert not (output_dir / "case.py").exists()
-
-
-def test_both_browsers_are_reset_before_a_retry() -> None:
-    """Without this the agent retries against its own failed attempt.
-
-    The MCP browser would still be carrying, say, an accepted cookie
-    banner -- so the agent never sees the banner again and cannot produce
-    the dismissal the generated script needs.
-    """
-    extractor = MagicMock(spec=Extractor)
-    extractor.run_step.side_effect = [_statements(), _statements()]
-    validator = MagicMock(spec=Validator)
-    validator.run.side_effect = [
-        StepVerdict(is_valid=False, reason="cookie banner blocked the click"),
-        StepVerdict(is_valid=True),
-    ]
-    mcp, browser = _browsers()
-
-    _extract_step(_MODULE, 0, extractor, validator, mcp, browser, [])
-
-    mcp.reset.assert_called_once()
-    browser.reset.assert_called_once()
-    mcp.call_tool.assert_called_once_with(
-        "browser_navigate", {"url": "https://example.com/login"}
-    )
-
-
-def test_the_validated_prefix_is_replayed_after_a_reset() -> None:
-    """Resetting discards earlier steps too, so they must be re-applied."""
-    extractor = MagicMock(spec=Extractor)
-    extractor.run_step.side_effect = [_statements(), _statements()]
-    validator = MagicMock(spec=Validator)
-    validator.run.side_effect = [
-        StepVerdict(is_valid=False, reason="nope"),
-        StepVerdict(is_valid=True),
-    ]
-    mcp, browser = _browsers()
-    history = ['page.goto("https://example.com")']
-
-    _extract_step(_MODULE, 0, extractor, validator, mcp, browser, history)
-
-    replayed = browser.run.call_args[0][0]
-    assert [s.code for s in replayed] == history
-
-
-def test_no_reset_happens_when_the_step_passes() -> None:
-    """Resetting costs a reconnect and a page load; don't pay it needlessly."""
-    extractor = MagicMock(spec=Extractor)
-    extractor.run_step.return_value = _statements()
-    validator = MagicMock(spec=Validator)
-    validator.run.return_value = StepVerdict(is_valid=True)
-    mcp, browser = _browsers()
-
-    _extract_step(_MODULE, 0, extractor, validator, mcp, browser, [])
-
-    mcp.reset.assert_not_called()
-    browser.reset.assert_not_called()

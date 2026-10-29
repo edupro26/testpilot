@@ -67,23 +67,21 @@ def _script(locale: str = "en-US", body: str | None = None) -> str:
     )
 
 
-def test_returns_the_llm_script() -> None:
-    """The LLM assembles the file; a well-formed one is returned as is."""
-    script = Generator(MockProvider(_script())).run(_TEST_CASE)
+def test_assembles_the_validated_steps_into_the_llm_script() -> None:
+    """The LLM gets every validated piece verbatim and its file is returned.
 
-    assert script == _script()
-    compile(script, "<generated>", "exec")
-
-
-def test_the_prompt_carries_the_steps_statements_and_fixture() -> None:
-    """The LLM needs every validated piece, verbatim, to assemble the file."""
+    A Markdown fence around the code must not end up in the file.
+    """
     seen: dict[str, str] = {}
 
     def capture(_system: str, user: str) -> str:
         seen["prompt"] = user
-        return _script(locale="pt-PT")
+        return f"```python\n{_script(locale='pt-PT')}```"
 
-    Generator(MockProvider(capture), locale="pt-PT").run(_TEST_CASE)
+    script = Generator(MockProvider(capture), locale="pt-PT").run(_TEST_CASE)
+
+    assert script == _script(locale="pt-PT")
+    compile(script, "<generated>", "exec")
 
     prompt = seen["prompt"]
     for step in _TEST_CASE.modules[0].execution_steps:
@@ -95,51 +93,40 @@ def test_the_prompt_carries_the_steps_statements_and_fixture() -> None:
     assert '"locale": "pt-PT"' in prompt
 
 
-def test_a_fenced_reply_is_unwrapped() -> None:
-    """A Markdown fence around the code must not end up in the file."""
-    fenced = f"```python\n{_script()}```"
-
-    assert Generator(MockProvider(fenced)).run(_TEST_CASE) == _script()
-
-
-def test_a_dropped_statement_is_rejected() -> None:
-    """What was validated is what ships, or the run fails."""
-    body = f"    {_CONSENT}\n    {_ASSERT}\n"
-
-    with pytest.raises(GeneratorError, match="Signup / Login"):
-        Generator(MockProvider(_script(body=body))).run(_TEST_CASE)
-
-
-def test_an_altered_statement_is_rejected() -> None:
-    """Even a small edit means the shipped line was never validated."""
-    body = (
-        f"    {_CONSENT}\n"
-        f"    {_CLICK.replace('.click()', '.click(force=True)')}\n"
-        f"    {_ASSERT}\n"
-    )
-
-    with pytest.raises(GeneratorError, match="altered"):
-        Generator(MockProvider(_script(body=body))).run(_TEST_CASE)
-
-
-def test_reordered_statements_are_rejected() -> None:
-    """Statements depend on each other, so their order is part of the proof."""
-    body = f"    {_CLICK}\n    {_CONSENT}\n    {_ASSERT}\n"
-
-    with pytest.raises(GeneratorError):
-        Generator(MockProvider(_script(body=body))).run(_TEST_CASE)
-
-
-def test_a_missing_or_changed_fixture_is_rejected() -> None:
-    """The locale fixture is what makes the locators reproduce at run time."""
-    with pytest.raises(GeneratorError, match="en-US"):
-        Generator(MockProvider(_script(locale="pt-PT"))).run(_TEST_CASE)
-
-
-def test_a_script_that_does_not_compile_is_rejected() -> None:
-    """A broken file must fail here, not later under pytest."""
-    with pytest.raises(GeneratorError, match="does not compile"):
-        Generator(MockProvider(_script() + "def broken(:\n")).run(_TEST_CASE)
+@pytest.mark.parametrize(
+    ("reply", "match"),
+    [
+        pytest.param(
+            _script(body=f"    {_CONSENT}\n    {_ASSERT}\n"),
+            "Signup / Login",
+            id="dropped-statement",
+        ),
+        pytest.param(
+            _script(
+                body=f"    {_CONSENT}\n"
+                f"    {_CLICK.replace('.click()', '.click(force=True)')}\n"
+                f"    {_ASSERT}\n"
+            ),
+            "altered",
+            id="altered-statement",
+        ),
+        pytest.param(
+            _script(body=f"    {_CLICK}\n    {_CONSENT}\n    {_ASSERT}\n"),
+            "dropped or altered",
+            id="reordered-statements",
+        ),
+        pytest.param(_script(locale="pt-PT"), "en-US", id="changed-fixture"),
+        pytest.param(
+            _script() + "def broken(:\n", "does not compile", id="does-not-compile"
+        ),
+    ],
+)
+def test_rejects_a_script_that_is_not_exactly_what_was_validated(
+    reply: str, match: str
+) -> None:
+    """What was validated, in order and under its locale, is what ships."""
+    with pytest.raises(GeneratorError, match=match):
+        Generator(MockProvider(reply)).run(_TEST_CASE)
 
 
 def test_rejects_a_test_case_with_no_statements() -> None:

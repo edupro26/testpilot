@@ -19,75 +19,43 @@ _MODULE = Module(
 )
 
 
-def _mcp() -> FakeMCP:
-    """A fake that reports running the click, so collecting succeeds."""
-    return FakeMCP(
-        {"browser_click": McpResult(is_error=False, content=emitted(_CLICK))}
-    )
-
-
-def _llm() -> MockProvider:
-    return MockProvider(
+def _run_step(index: int, history: list[str], reset_to: str | None = None) -> str:
+    """Run one step against a fake that clicks; return the agent's prompt."""
+    mcp = FakeMCP({"browser_click": McpResult(is_error=False, content=emitted(_CLICK))})
+    llm = MockProvider(
         turns=[
             tool_turn("browser_click", {"element": "link", "target": "e1"}),
-            tool_turn(
-                "step_done",
-                {"statements": [{"code": _CLICK}]},
-                "c2",
-            ),
+            tool_turn("step_done", {"statements": [{"code": _CLICK}]}, "c2"),
         ]
     )
 
-
-def test_runs_a_step_and_returns_its_statements() -> None:
-    """One step at a time, so the Validator can prove each before the next."""
-    statements = Extractor(_llm(), _mcp()).run_step(_MODULE, 0, history=[])
-
-    assert [s.code for s in statements] == [_CLICK]
-
-
-def test_the_first_step_is_told_the_browser_is_blank() -> None:
-    """Without this the agent may assume a page is already open."""
-    llm = _llm()
-
-    Extractor(llm, _mcp()).run_step(_MODULE, 0, history=[])
-
-    prompt = llm.conversations[0].user_prompt
-    assert "blank page" in prompt
-    assert _MODULE.url in prompt
-
-
-def test_a_later_step_is_told_what_already_ran() -> None:
-    """The agent must continue from live state, not redo earlier steps."""
-    llm = _llm()
-
-    Extractor(llm, _mcp()).run_step(_MODULE, 1, history=[_CLICK])
-
-    prompt = llm.conversations[0].user_prompt
-    assert _CLICK in prompt
-    assert "Do not repeat" in prompt
-
-
-def test_a_retry_after_a_reset_is_told_the_earlier_state_is_gone() -> None:
-    """After a reset only the URL survives, so the setup must be redone."""
-    llm = _llm()
-
-    Extractor(llm, _mcp()).run_step(
-        _MODULE, 1, history=[_CLICK], reset_to="https://example.com/x"
+    statements = Extractor(llm, mcp).run_step(
+        _MODULE, index, history=history, reset_to=reset_to
     )
 
-    prompt = llm.conversations[0].user_prompt
-    assert "fresh session" in prompt
-    assert "https://example.com/x" in prompt
-    assert _CLICK in prompt
-    assert "WITHOUT reporting" in prompt
-    assert "Do not repeat" not in prompt
+    assert [s.code for s in statements] == [_CLICK]
+    return llm.conversations[0].user_prompt
 
 
-def test_the_step_text_reaches_the_agent() -> None:
-    """The agent is driving one specific step, not the whole module."""
-    llm = _llm()
+def test_each_step_is_briefed_on_its_text_and_the_browser_state() -> None:
+    """The agent drives one step and must know what the browser already shows.
 
-    Extractor(llm, _mcp()).run_step(_MODULE, 1, history=[_CLICK])
+    The first step starts on a blank page; a later step continues from live
+    state; a retry after a reset only keeps the URL, so setup must be redone.
+    """
+    first = _run_step(0, history=[])
+    assert "Click Signup / Login" in first
+    assert "blank page" in first
+    assert _MODULE.url in first
 
-    assert "Verify the login section is visible" in llm.conversations[0].user_prompt
+    later = _run_step(1, history=[_CLICK])
+    assert "Verify the login section is visible" in later
+    assert _CLICK in later
+    assert "Do not repeat" in later
+
+    retry = _run_step(1, history=[_CLICK], reset_to="https://example.com/x")
+    assert "fresh session" in retry
+    assert "https://example.com/x" in retry
+    assert _CLICK in retry
+    assert "WITHOUT reporting" in retry
+    assert "Do not repeat" not in retry

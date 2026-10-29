@@ -31,17 +31,11 @@ def test_run_returns_test_case_for_valid_llm_response() -> None:
     assert test_case.modules[0].url == "https://automationexercise.com"
 
 
-def test_run_raises_structurer_error_for_malformed_json() -> None:
-    """A non-JSON response raises StructurerError, not a raw JSONDecodeError."""
-    structurer = Structurer(MockProvider("not valid json"))
-
+def test_run_raises_structurer_error_for_a_bad_llm_response() -> None:
+    """Non-JSON or wrongly shaped JSON raises StructurerError, not a raw error."""
     with pytest.raises(StructurerError, match="not valid JSON"):
-        structurer.run("# Some test case")
+        Structurer(MockProvider("not valid json")).run("# Some test case")
 
-
-def test_run_raises_structurer_error_for_schema_mismatch() -> None:
-    """Valid JSON that doesn't match the TestCase shape raises StructurerError."""
-    structurer = Structurer(MockProvider(json.dumps({"unexpected": "shape"})))
-
+    wrong_shape = MockProvider(json.dumps({"unexpected": "shape"}))
     with pytest.raises(StructurerError, match="did not match the TestCase shape"):
-        structurer.run("# Some test case")
+        Structurer(wrong_shape).run("# Some test case")

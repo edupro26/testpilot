@@ -10,40 +10,32 @@ from test.extractor.fakes import emitted
 _CLICK = 'page.get_by_role("button", name="Consent").click()'
 
 
-def test_collects_the_reported_playwright_code() -> None:
-    """The emitted block is the only source of truth for a statement."""
-    assert McpResult(is_error=False, content=emitted(_CLICK)).code == [_CLICK]
+def test_only_the_reported_playwright_code_of_a_successful_call_is_collected() -> None:
+    """The emitted block is the only source of truth for a statement.
 
-
-def test_collects_several_statements_from_one_call() -> None:
-    """browser_fill_form reports one line per field."""
+    browser_fill_form reports one line per field; a failure or a findings-only
+    result (browser_find, browser_snapshot) collects nothing.
+    """
     fill = 'page.get_by_label("Email").fill("a@b.c")'
 
-    collected = McpResult(is_error=False, content=emitted(fill, _CLICK)).code
-
-    assert collected == [fill, _CLICK]
-
-
-def test_a_failed_call_yields_no_code() -> None:
-    """MCP only reports code it actually ran, so a failure collects nothing."""
-    error = McpResult(is_error=True, content="### Error\noverlay intercepts clicks")
-
-    assert error.code == []
-
-
-def test_a_result_without_a_code_block_yields_no_code() -> None:
-    """browser_find and browser_snapshot report findings, not actions."""
+    assert McpResult(is_error=False, content=emitted(fill, _CLICK)).code == [
+        fill,
+        _CLICK,
+    ]
+    assert McpResult(is_error=True, content="### Error\noverlay intercepts").code == []
     assert McpResult(is_error=False, content="### Result\nFound 2 matches").code == []
 
 
-def test_only_genuinely_unusable_tools_are_withheld() -> None:
-    """A tool the agent cannot call is a capability it does not have."""
+def test_the_tool_allowlists() -> None:
+    """Only unusable tools are withheld; only Python-emitting ones are collected.
+
+    JavaScript-emitting tools still drive and inspect the browser, so the
+    agent keeps them -- their code just never becomes a statement.
+    """
     assert "browser_run_code_unsafe" not in ALLOWED_TOOLS
     assert "browser_close" not in ALLOWED_TOOLS
+    assert set(ALLOWED_TOOLS) >= COLLECTABLE_TOOLS
 
-
-def test_the_agent_keeps_the_javascript_emitting_tools() -> None:
-    """They drive and inspect the browser; only their code is unusable."""
     for name in (
         "browser_press_key",
         "browser_navigate_back",
@@ -55,15 +47,7 @@ def test_the_agent_keeps_the_javascript_emitting_tools() -> None:
         assert name in ALLOWED_TOOLS
         assert name not in COLLECTABLE_TOOLS
 
-
-def test_collectable_tools_are_a_subset_of_allowed_tools() -> None:
-    """A tool that cannot be called cannot contribute code."""
-    assert set(ALLOWED_TOOLS) >= COLLECTABLE_TOOLS
-
-
-def test_the_interaction_and_assertion_tools_are_collectable() -> None:
-    """These honour --codegen python, so they build the script."""
-    for name in (
+    assert {
         "browser_navigate",
         "browser_click",
         "browser_hover",
@@ -74,8 +58,7 @@ def test_the_interaction_and_assertion_tools_are_collectable() -> None:
         "browser_verify_text_visible",
         "browser_verify_value",
         "browser_verify_list_visible",
-    ):
-        assert name in COLLECTABLE_TOOLS
+    } <= COLLECTABLE_TOOLS
 
 
 def test_an_unreachable_server_raises_a_helpful_error() -> None:

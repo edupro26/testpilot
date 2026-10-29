@@ -11,221 +11,127 @@ from test.extractor.fakes import FakeMCP, emitted
 
 _CLICK = 'page.get_by_role("link", name="Signup / Login").click()'
 _CONSENT = 'page.get_by_role("button", name="Consent").click()'
+_TAB = "await page.keyboard.press('Tab');"
 
 
-def _done(*statements: dict, call_id: str = "c1") -> ToolUseResponse:
-    """Build a step_done turn carrying `statements`."""
-    return tool_turn("step_done", {"statements": list(statements)}, call_id)
+def _done(*codes: str) -> ToolUseResponse:
+    """Build a step_done turn reporting `codes` as the step's statements."""
+    return tool_turn("step_done", {"statements": [{"code": c} for c in codes]}, "done")
 
 
-def _statement(code: str) -> dict:
-    return {"code": code}
+class _SequencedMCP(FakeMCP):
+    """Returns the given results in call order, whatever the tool."""
+
+    def __init__(self, *results: McpResult) -> None:
+        super().__init__()
+        self._sequence = iter(results)
+
+    def call_tool(self, name: str, arguments: dict) -> McpResult:
+        self.calls.append((name, arguments))
+        return next(self._sequence)
 
 
-def test_collects_the_code_mcp_actually_ran() -> None:
-    """A statement MCP emitted is accepted and carried through."""
-    mcp = FakeMCP({"browser_click": McpResult(is_error=False, content=emitted(_CLICK))})
+def test_drives_the_browser_recovers_and_collects_what_mcp_ran() -> None:
+    """The overlay case, on a retry, with a non-collectable tool in the mix.
+
+    A failed click, a dismissal, then a successful retry: both successful
+    actions are collected. A JavaScript-emitting tool stays callable even
+    though its code can never become a statement, and the retry feedback
+    reaches the model.
+    """
+    mcp = _SequencedMCP(
+        McpResult(is_error=False, content=emitted(_TAB)),
+        McpResult(is_error=True, content="### Error\noverlay intercepts pointer"),
+        McpResult(is_error=False, content=emitted(_CONSENT)),
+        McpResult(is_error=False, content=emitted(_CLICK)),
+    )
     llm = MockProvider(
         turns=[
-            tool_turn("browser_click", {"element": "link", "target": "e1"}),
-            _done(_statement(_CLICK)),
-        ]
-    )
-
-    statements = StepAgent(llm, mcp).run("Click Signup / Login", context="fresh")
-
-    assert [s.code for s in statements] == [_CLICK]
-    assert mcp.calls == [("browser_click", {"element": "link", "target": "e1"})]
-
-
-def test_rejects_a_statement_mcp_never_ran() -> None:
-    """The verbatim rule is enforced in code, not merely prompted."""
-    mcp = FakeMCP({"browser_click": McpResult(is_error=False, content=emitted(_CLICK))})
-    llm = MockProvider(
-        turns=[
-            tool_turn("browser_click", {"element": "link", "target": "e1"}),
-            _done(_statement("page.evaluate(\"fetch('/admin')\")")),
-        ]
-    )
-
-    with pytest.raises(ExtractorError, match="no collectable"):
-        StepAgent(llm, mcp).run("Click Signup / Login", context="fresh")
-
-
-def test_rejects_an_edited_statement() -> None:
-    """A near-miss is still a miss -- the locator must match character for character."""
-    mcp = FakeMCP({"browser_click": McpResult(is_error=False, content=emitted(_CLICK))})
-    llm = MockProvider(
-        turns=[
-            tool_turn("browser_click", {"element": "link", "target": "e1"}),
-            _done(_statement('page.get_by_role("link", name="Signup").click()')),
-        ]
-    )
-
-    with pytest.raises(ExtractorError):
-        StepAgent(llm, mcp).run("Click Signup / Login", context="fresh")
-
-
-def test_recovers_from_a_failed_action_and_collects_both_statements() -> None:
-    """The overlay case: a failed click, a dismissal, then a successful retry."""
-    results = iter(
-        [
-            McpResult(
-                is_error=True,
-                content="### Error\noverlay intercepts pointer events",
-            ),
-            McpResult(is_error=False, content=emitted(_CONSENT)),
-            McpResult(is_error=False, content=emitted(_CLICK)),
-        ]
-    )
-
-    class SequencedMCP(FakeMCP):
-        def call_tool(self, name: str, arguments: dict) -> McpResult:
-            self.calls.append((name, arguments))
-            return next(results)
-
-    mcp = SequencedMCP()
-    llm = MockProvider(
-        turns=[
+            tool_turn("browser_press_key", {"key": "Tab"}),
             tool_turn("browser_click", {"element": "link", "target": "e1"}),
             tool_turn("browser_click", {"element": "consent", "target": "e2"}),
             tool_turn("browser_click", {"element": "link", "target": "e1"}),
-            _done(_statement(_CONSENT), _statement(_CLICK)),
+            _done(_CONSENT, _CLICK),
         ]
     )
 
-    statements = StepAgent(llm, mcp).run("Click Signup / Login", context="fresh")
+    statements = StepAgent(llm, mcp).run(
+        "Click Signup / Login", context="fresh", feedback="clicked the wrong link"
+    )
 
     assert [s.code for s in statements] == [_CONSENT, _CLICK]
+    assert [name for name, _ in mcp.calls] == [
+        "browser_press_key",
+        "browser_click",
+        "browser_click",
+        "browser_click",
+    ]
+    conversation = llm.conversations[0]
+    assert "clicked the wrong link" in conversation.user_prompt
+    tools = {tool["name"] for tool in conversation.tools}
+    assert {"step_done", "browser_verify_element_visible"} <= tools
+    assert "browser_run_code_unsafe" not in tools
 
 
-def test_accepts_a_step_needing_no_interaction() -> None:
-    """Some steps only restate where the browser already is."""
-    llm = MockProvider(turns=[_done()])
+@pytest.mark.parametrize(
+    ("tool", "ran", "reported", "match"),
+    [
+        pytest.param(
+            "browser_click",
+            _CLICK,
+            "page.evaluate(\"fetch('/admin')\")",
+            "no collectable",
+            id="never-ran",
+        ),
+        pytest.param(
+            "browser_click",
+            _CLICK,
+            'page.get_by_role("link", name="Signup").click()',
+            "no collectable",
+            id="edited",
+        ),
+        pytest.param(
+            "browser_verify_text_visible",
+            'expect(page.get_by_text("Your email or password is")).to_be_visible()',
+            'expect(page.get_by_text("Your email or password is incorrect!"))'
+            ".to_be_visible()",
+            "no collectable",
+            id="widened-truncated-locator",
+        ),
+        pytest.param(
+            "browser_press_key", _TAB, _TAB, "no collectable", id="non-collectable"
+        ),
+        pytest.param(
+            "browser_click",
+            "await new Promise(f => setTimeout(f, 1 * 1000));",
+            "await new Promise(f => setTimeout(f, 1 * 1000));",
+            "not valid Python",
+            id="not-python",
+        ),
+    ],
+)
+def test_rejects_a_statement_not_emitted_verbatim_by_a_collectable_tool(
+    tool: str, ran: str, reported: str, match: str
+) -> None:
+    """The verbatim rule is enforced in code, not merely prompted."""
+    mcp = FakeMCP({tool: McpResult(is_error=False, content=emitted(ran))})
+    llm = MockProvider(turns=[tool_turn(tool, {}), _done(reported)])
 
-    assert StepAgent(llm, FakeMCP()).run("Observe the page", context="fresh") == []
+    with pytest.raises(ExtractorError, match=match):
+        StepAgent(llm, mcp).run("Do the step", context="fresh")
 
 
-def test_errors_when_the_turn_cap_is_reached() -> None:
-    """A model that never finishes is abandoned rather than looping forever."""
-    llm = MockProvider(
+def test_the_loop_ends_only_through_step_done() -> None:
+    """step_done may report nothing; never reporting it is an error."""
+    idle = MockProvider(turns=[_done()])
+    assert StepAgent(idle, FakeMCP()).run("Look", context="x") == []
+
+    looping = MockProvider(
         turns=[tool_turn("browser_find", {"text": "x"}, f"c{i}") for i in range(10)]
     )
-
     with pytest.raises(ExtractorError, match="did not complete within"):
-        StepAgent(llm, FakeMCP(), max_turns=3).run("Click something", context="fresh")
+        StepAgent(looping, FakeMCP(), max_turns=3).run("Click something", context="x")
 
-
-def test_errors_when_the_model_stops_without_reporting() -> None:
-    """A text-only reply means the step was never reported complete."""
-    llm = MockProvider(turns=[ToolUseResponse(text="I am not sure how to proceed")])
-
+    chatty = MockProvider(turns=[ToolUseResponse(text="I am not sure how to proceed")])
     with pytest.raises(ExtractorError, match="stopped without calling"):
-        StepAgent(llm, FakeMCP()).run("Click something", context="fresh")
-
-
-def test_feedback_reaches_the_prompt_on_a_retry() -> None:
-    """Retry feedback must be visible to the model, or the retry is blind."""
-    llm = MockProvider(turns=[_done()])
-
-    StepAgent(llm, FakeMCP()).run(
-        "Verify the error", context="fresh", feedback="asserted the wrong element"
-    )
-
-    assert "asserted the wrong element" in llm.conversations[0].user_prompt
-
-
-def test_step_done_is_offered_alongside_the_mcp_tools() -> None:
-    """The model cannot finish a step without the reporting tool."""
-    llm = MockProvider(turns=[_done()])
-
-    StepAgent(llm, FakeMCP()).run("Click something", context="fresh")
-
-    names = {tool["name"] for tool in llm.conversations[0].tools}
-    assert "step_done" in names
-    assert "browser_verify_element_visible" in names
-    assert "browser_run_code_unsafe" not in names
-
-
-def test_rejects_a_statement_that_is_not_valid_python() -> None:
-    """Backstop against a tool that ignores --codegen python."""
-    javascript = "await new Promise(f => setTimeout(f, 1 * 1000));"
-    mcp = FakeMCP(
-        {"browser_click": McpResult(is_error=False, content=emitted(javascript))}
-    )
-    llm = MockProvider(
-        turns=[
-            tool_turn("browser_click", {"element": "x", "target": "e1"}),
-            _done(_statement(javascript)),
-        ]
-    )
-
-    with pytest.raises(ExtractorError, match="not valid Python"):
-        StepAgent(llm, mcp).run("Wait a second", context="fresh")
-
-
-def test_code_from_a_non_collectable_tool_cannot_become_a_statement() -> None:
-    """browser_press_key drives the UI but emits JavaScript."""
-    javascript = "await page.keyboard.press('Tab');"
-    mcp = FakeMCP(
-        {"browser_press_key": McpResult(is_error=False, content=emitted(javascript))}
-    )
-    llm = MockProvider(
-        turns=[
-            tool_turn("browser_press_key", {"key": "Tab"}),
-            _done(_statement(javascript)),
-        ]
-    )
-
-    with pytest.raises(ExtractorError, match="no collectable"):
-        StepAgent(llm, mcp).run("Press Tab", context="fresh")
-
-
-def test_a_non_collectable_tool_can_still_be_called() -> None:
-    """Withholding the tool would cost the agent a real capability."""
-    mcp = FakeMCP(
-        {
-            "browser_press_key": McpResult(
-                is_error=False, content=emitted("await page.keyboard.press('Tab');")
-            ),
-            "browser_click": McpResult(is_error=False, content=emitted(_CLICK)),
-        }
-    )
-    llm = MockProvider(
-        turns=[
-            tool_turn("browser_press_key", {"key": "Tab"}),
-            tool_turn("browser_click", {"element": "link", "target": "e1"}),
-            _done(_statement(_CLICK)),
-        ]
-    )
-
-    statements = StepAgent(llm, mcp).run("Press Tab then click", context="fresh")
-
-    assert [s.code for s in statements] == [_CLICK]
-    assert ("browser_press_key", {"key": "Tab"}) in mcp.calls
-
-
-def test_a_shortened_assertion_is_collected_as_emitted() -> None:
-    """Playwright shortens long locator text; the line is kept verbatim."""
-    short = 'expect(page.get_by_text("Your email or password is")).to_be_visible()'
-    widened = (
-        'expect(page.get_by_text("Your email or password is incorrect!"))'
-        ".to_be_visible()"
-    )
-    mcp = FakeMCP(
-        {
-            "browser_verify_text_visible": McpResult(
-                is_error=False, content=emitted(short)
-            )
-        }
-    )
-    verify = tool_turn(
-        "browser_verify_text_visible", {"text": "Your email or password is incorrect!"}
-    )
-
-    accepted = StepAgent(MockProvider(turns=[verify, _done(_statement(short))]), mcp)
-    assert [s.code for s in accepted.run("Verify the error", context="x")] == [short]
-
-    rejected = StepAgent(MockProvider(turns=[verify, _done(_statement(widened))]), mcp)
-    with pytest.raises(ExtractorError, match="no collectable"):
-        rejected.run("Verify the error", context="x")
+        StepAgent(chatty, FakeMCP()).run("Click something", context="x")
