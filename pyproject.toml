@@ -1,7 +1,7 @@
 [project]
-name = "Test-Script-AI-Generator"
+name = "testpilot"
 version = "0.1.0"
-description = "A python application that use GenAI to generate a test script for a given test case"
+description = "TestPilot is a GenAI enabler for quick test script generation and automation"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
