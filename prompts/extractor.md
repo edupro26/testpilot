@@ -1,42 +1,77 @@
-Decide which UI elements each numbered execution step below needs to
-interact with or verify on this page, and return one object per needed
-element.
+Perform ONE test step in the live browser you are connected to, using the
+Playwright MCP tools, then report the Playwright code that step required.
 
-OBJECTIVE
-- For each step, identify the UI elements it needs to locate: elements to
-    click, fields to fill, or text/messages to read for a verification.
-- A step that does not require locating anything on this page (e.g. it
-    only navigates to another page) needs no object at all. Do not invent
-    elements for it.
-- A step may need more than one element (e.g. "enter an incorrect email
-    and password" needs both the email field and the password field).
+THE STEP
+{step}
 
-RULES
-- Reference each step by its 0-based index in "step_index" — do not
-    paraphrase or repeat its text.
-- Only extract data that is actually present in the page content. Never
-    invent a selector for an element you cannot find.
-- Prefer stable identifiers, in this order of preference: an "id"
-    attribute, then a `data-*` attribute, then other CSS-selectable
-    attributes (class, name, type, placeholder), then visible text as a
-    last resort.
-- "type" must be exactly one of: "button", "link", "input", "checkbox",
-    "dropdown", "text", "other".
-- "identifier_type" must be exactly one of: "id", "css", "xpath", "text".
-    "identifier_tracking" must match its type's format:
-    - "id": the element's "id" attribute value alone (e.g. "login-button"),
-        without a leading "#".
-    - "css": a full CSS selector (e.g. "[data-qa='login-button']").
-    - "xpath": a full XPath expression (e.g. "//button[text()='Login']").
-    - "text": the element's exact visible text (e.g. "Login").
-- "request_description": a short description of what the element is for,
-    in its step's context.
-- "input_value": for elements the step types into or selects a value on
-    (inputs, dropdowns), a plausible literal value implied by the step
-    (e.g. "enter an incorrect email" -> a made-up invalid-looking address).
-    Omit it (or use null) for elements that are only clicked or read, such
-    as buttons, links, or text being verified.
-
-Steps:
-{numbered_steps}
+CURRENT STATE
+{context}
 {feedback_section}
+HOW TO WORK
+- Use `browser_find` to locate elements and read their `ref`. It returns
+    only the matching part of the page, which is far cheaper than a full
+    snapshot.
+- Only call `browser_snapshot` if `browser_find` is not enough, and pass a
+    `depth` when you do. An unbounded snapshot of a busy page is enormous.
+- Act with `browser_click`, `browser_type`, `browser_fill_form`,
+    `browser_select_option` or `browser_press_key`, passing the `ref` you
+    found as `target`.
+- For a step that VERIFIES something, use the verification tools rather
+    than just looking at the page: `browser_verify_element_visible` (best
+    -- give it the element's `role` and `accessibleName`),
+    `browser_verify_text_visible`, `browser_verify_value`, or
+    `browser_verify_list_visible`. These assert against the live page AND
+    produce the assertion code the test needs. A verification step that
+    reports no statements is a failed step.
+- When the step quotes an exact string, pass that string in full to the
+    verification tool, and prefer the element's complete accessible name
+    over a shortened one, so the full text is checked against the live page.
+    The emitted locator may still be a shorter prefix of it; copy it as is.
+- **A popup belongs to the step that makes it appear.** Right after
+    navigating, look for a cookie or consent banner and dismiss it before
+    doing anything else in that step, even if nothing has blocked you yet.
+    Likewise, when an action opens any other popup (a newsletter or promo
+    dialog, a survey), dismiss it in that same step, right after the
+    action. Dismissing it later -- once a click finally fails -- buries the
+    dismissal in the middle of the test, after assertions that were made
+    while the popup still covered the page.
+- If an action fails anyway because an overlay is intercepting pointer
+    events, dismiss that overlay and retry; the dismissal belongs to the
+    step you are on.
+- If an action fails because a locator matched several elements, the error
+    names a more specific locator for each candidate -- use one of them.
+
+LOCATORS THAT SURVIVE OUTSIDE THIS SESSION
+The code you report is replayed in a plain Playwright script that has no
+accessibility tree -- only the DOM. You can see more here than that script
+will.
+
+- `target` accepts either a snapshot `ref` or a CSS selector. A `ref`
+    produces a role/text locator; a CSS selector produces
+    `page.locator("<selector>")`.
+- If feedback says a statement resolved to nothing in a clean browser, the
+    element's accessible name probably differs there -- many cookie
+    banners are translated by the server, so a button reading "Allow all"
+    for you may read something else at run time. Retry that action with a
+    **CSS selector** as `target`, using a stable `id` or `data-*`
+    attribute, which does not depend on the wording.
+- Use `browser_evaluate` to find such a selector, for example by querying
+    `document.querySelectorAll('[id*=consent i], [id*=cookie i]')`.
+- Avoid scoping to auto-generated container ids that look random. Prefer
+    an id or attribute that is clearly meaningful.
+
+REPORTING THE STEP
+Call `step_done` when the step is complete.
+
+- You NEVER write Playwright code. Every successful tool call reports the
+    exact code it ran under "### Ran Playwright code". Copy those lines
+    character for character.
+- A statement that was not emitted by a successful tool call in this
+    conversation WILL BE REJECTED, and the step will fail. Do not edit,
+    reformat, merge, split or invent code.
+- Report only the lines that belong to this step, in execution order.
+    Leave out exploratory detours: failed attempts, and anything emitted by
+    `browser_find` or `browser_snapshot`.
+- If the step needs no browser interaction at all (for example, it only
+    restates where the browser already is), call `step_done` with an empty
+    `statements` list.

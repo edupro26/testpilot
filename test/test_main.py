@@ -1,4 +1,4 @@
-"""Tests for src.main: the pipeline's actual wiring and retry-on-failure loop."""
+"""Tests for src.main: the pipeline's wiring and its retry-on-failure loop."""
 
 import json
 from pathlib import Path
@@ -7,14 +7,17 @@ from unittest.mock import MagicMock
 import pytest
 import typer
 from pytest_mock import MockerFixture
-from src.exceptions import CrawlerError, ExtractorError, ValidatorError
-from src.extractor.crawler import CrawlResult
+from src.exceptions import ExtractorError, McpError, ValidatorError
+from src.extractor.mcp.server import PlaywrightMCP
 from src.extractor.service import Extractor
 from src.llm.provider.mock import MockProvider
-from src.main import _extract_module, _load_settings_or_fail, app
-from src.model.test_case import ExecutionStep, Module
-from src.validator.service import IdentifierVerdict, ValidationResult, Validator
-from typer.testing import CliRunner
+from src.main import _extract_step, _load_settings_or_fail, app
+from src.model.test_case import ExecutionStep, Module, StepStatement
+from src.validator.browser import ValidationBrowser
+from src.validator.service import StepVerdict, Validator
+from typer.testing import CliRunner, Result
+
+_CLICK = 'page.get_by_role("button", name="Login").click()'
 
 _MODULE = Module(
     url="https://example.com/login",
@@ -23,113 +26,117 @@ _MODULE = Module(
 )
 
 
-def _passing_result() -> ValidationResult:
-    return ValidationResult(
-        verdicts=[
-            IdentifierVerdict(identifier_tracking="#login", is_valid=True, reason="ok")
-        ]
-    )
+def _statements(code: str = _CLICK) -> list[StepStatement]:
+    return [StepStatement(code=code)]
 
 
-def _failing_result() -> ValidationResult:
-    return ValidationResult(
-        verdicts=[
-            IdentifierVerdict(
-                identifier_tracking="#login", is_valid=False, reason="not found"
-            )
-        ]
-    )
+def _browsers() -> tuple[MagicMock, MagicMock]:
+    """A fake MCP connection and validation browser, for the retry wiring."""
+    mcp = MagicMock(spec=PlaywrightMCP)
+    browser = MagicMock(spec=ValidationBrowser)
+    browser.page.url = "https://example.com/login"
+    return mcp, browser
 
 
-def test_extract_module_succeeds_without_retry_when_validation_passes() -> None:
-    """A module that validates on the first attempt returns immediately, no retry."""
+def test_a_step_that_validates_first_time_is_not_retried() -> None:
+    """The happy path must cost exactly one agent loop."""
     extractor = MagicMock(spec=Extractor)
-    extractor.run.return_value = (_MODULE, ["<html></html>"])
+    extractor.run_step.return_value = _statements()
+    accepted = [StepStatement(code=_CLICK, reason="clicks the login button")]
     validator = MagicMock(spec=Validator)
-    validator.run.return_value = _passing_result()
+    validator.run.return_value = StepVerdict(is_valid=True, statements=accepted)
 
-    result = _extract_module(_MODULE, extractor, validator)
+    result = _extract_step(_MODULE, 0, extractor, validator, *_browsers(), [])
 
-    assert result is _MODULE
-    assert extractor.run.call_count == 1
-    assert validator.run.call_count == 1
+    assert result == accepted
+    assert extractor.run_step.call_count == 1
 
 
-def test_extract_module_retries_once_with_feedback_and_succeeds() -> None:
-    """A failed first validation retries exactly once, with feedback threaded in."""
-    first_attempt = _MODULE.model_copy(update={"description": "first attempt"})
-    second_attempt = _MODULE.model_copy(update={"description": "second attempt"})
+def test_a_rejected_step_retries_once_with_the_feedback() -> None:
+    """A blind retry would be worthless -- the rejection must be threaded in."""
     extractor = MagicMock(spec=Extractor)
-    extractor.run.side_effect = [
-        (first_attempt, ["<html>first</html>"]),
-        (second_attempt, ["<html>second</html>"]),
+    second = _statements('page.get_by_role("button", name="Sign in").click()')
+    extractor.run_step.side_effect = [_statements(), second]
+    rejection = StepVerdict(is_valid=False, reason="clicked the wrong button")
+    validator = MagicMock(spec=Validator)
+    validator.run.side_effect = [
+        rejection,
+        StepVerdict(is_valid=True, statements=second),
     ]
-    failing_result = _failing_result()
-    validator = MagicMock(spec=Validator)
-    validator.run.side_effect = [failing_result, _passing_result()]
 
-    result = _extract_module(_MODULE, extractor, validator)
+    result = _extract_step(_MODULE, 0, extractor, validator, *_browsers(), [])
 
-    assert result is second_attempt
-    assert extractor.run.call_count == 2
-    _args, kwargs = extractor.run.call_args_list[1]
-    assert kwargs["feedback"] == failing_result.feedback
+    assert result == second
+    assert extractor.run_step.call_count == 2
+    retry = extractor.run_step.call_args_list[1].kwargs
+    assert retry["feedback"] == rejection.feedback
+    assert retry["reset_to"] == "https://example.com/login"
 
 
-def test_extract_module_raises_after_second_validation_also_fails() -> None:
-    """Both attempts failing raises ValidatorError with the URL, no 3rd attempt."""
+def test_a_step_failing_twice_aborts_the_run() -> None:
+    """Functional req 10: retry once, then stop with a clear error."""
     extractor = MagicMock(spec=Extractor)
-    extractor.run.return_value = (_MODULE, ["<html></html>"])
-    failing_result = _failing_result()
+    extractor.run_step.return_value = _statements()
+    rejection = StepVerdict(is_valid=False, reason="still wrong")
     validator = MagicMock(spec=Validator)
-    validator.run.return_value = failing_result
+    validator.run.return_value = rejection
 
-    with pytest.raises(ValidatorError, match=_MODULE.url) as exc_info:
-        _extract_module(_MODULE, extractor, validator)
+    with pytest.raises(ValidatorError, match="after retry") as excinfo:
+        _extract_step(_MODULE, 0, extractor, validator, *_browsers(), [])
 
-    assert failing_result.feedback in str(exc_info.value)
-    assert extractor.run.call_count == 2
-    assert validator.run.call_count == 2
+    assert "still wrong" in str(excinfo.value)
+    assert extractor.run_step.call_count == 2
 
 
-@pytest.mark.parametrize(
-    "error_cls",
-    [CrawlerError, ExtractorError],
-    ids=["crawler_error", "extractor_error"],
-)
-def test_extract_module_lets_extractor_failures_propagate_uncaught(
+@pytest.mark.parametrize("error_cls", [ExtractorError, McpError])
+def test_extraction_failures_propagate_rather_than_being_retried(
     error_cls: type,
 ) -> None:
-    """A CrawlerError/ExtractorError from Extractor.run propagates, not swallowed."""
+    """A rejected statement or a dead MCP server is not a validation failure."""
     extractor = MagicMock(spec=Extractor)
-    extractor.run.side_effect = error_cls("boom")
+    extractor.run_step.side_effect = error_cls("boom")
     validator = MagicMock(spec=Validator)
 
     with pytest.raises(error_cls, match="boom"):
-        _extract_module(_MODULE, extractor, validator)
+        _extract_step(_MODULE, 0, extractor, validator, *_browsers(), [])
 
     validator.run.assert_not_called()
 
 
 @pytest.mark.usefixtures("isolated_settings_env")
-def test_load_settings_or_fail_exits_on_invalid_configuration(
+def test_invalid_configuration_fails_before_any_llm_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A bad Settings() (invalid LLM_PROVIDER) fails before any LLM call is made."""
+    """A bad LLM_PROVIDER must not get as far as opening a browser."""
     monkeypatch.setenv("LLM_PROVIDER", "not-a-real-provider")
 
     with pytest.raises(typer.Exit):
         _load_settings_or_fail()
 
 
-@pytest.mark.usefixtures("isolated_settings_env")
-def test_cli_runs_the_full_pipeline_against_a_mock_provider(
-    mocker: MockerFixture, tmp_path: Path
-) -> None:
-    """The CLI runs the full pipeline end to end and writes JSON + script.
+_SMOKE_SCRIPT = f"""\"\"\"Smoke test.\"\"\"
 
-    Entirely offline: both the Crawler and the LLM provider are mocked.
-    """
+import pytest
+from playwright.sync_api import Page
+
+
+@pytest.fixture(scope="session")
+def browser_context_args(browser_context_args: dict) -> dict:
+    \"\"\"Pin the locale these locators were validated under.\"\"\"
+    return {{**browser_context_args, "locale": "en-US"}}
+
+
+def test_smoke_test(page: Page) -> None:
+    \"\"\"Click the login button.\"\"\"
+    # Click the login button
+    {_CLICK}
+"""
+
+
+def _run_cli(
+    mocker: MockerFixture, tmp_path: Path, generator_reply: str
+) -> tuple[Result, Path]:
+    """Run the CLI offline: MCP, the browser and the extractor are faked."""
     markdown_path = tmp_path / "automation" / "case.md"
     markdown_path.parent.mkdir()
     markdown_path.write_text("# Smoke test\n\nClick the login button.")
@@ -146,58 +153,113 @@ def test_cli_runs_the_full_pipeline_against_a_mock_provider(
             ],
         }
     )
-    extractor_json = json.dumps(
+    responses = iter(
         [
-            {
-                "step_index": 0,
-                "type": "button",
-                "request_description": "The login button",
-                "identifier_type": "css",
-                "identifier_tracking": "#login",
-            }
+            structurer_json,
+            json.dumps({"is_valid": True, "reason": "ok"}),
+            generator_reply,
         ]
     )
-    validator_json = json.dumps(
-        {
-            "verdicts": [
-                {"identifier_tracking": "#login", "is_valid": True, "reason": "ok"}
-            ]
-        }
-    )
-    generator_script = (
-        "from playwright.sync_api import Page, expect\n\n\n"
-        "def test_smoke_test(page: Page) -> None:\n"
-        "    # MODULE 0\n"
-        '    page.locator("css=#login").click()\n'
-    )
-    responses = iter(
-        [structurer_json, extractor_json, validator_json, generator_script]
-    )
 
-    def _next_response(_system_prompt: str, _user_prompt: str) -> str:
-        return next(responses)
-
-    mocker.patch("src.main.get_llm_provider", return_value=MockProvider(_next_response))
-    mock_crawler_cls = mocker.patch("src.main.Crawler")
-    mock_crawler_cls.return_value.run.return_value = CrawlResult(
-        url="https://example.com",
-        success=True,
-        html="<html><body><button id='login'>Login</button></body></html>",
+    mocker.patch(
+        "src.main.get_llm_provider",
+        return_value=MockProvider(lambda _s, _u: next(responses)),
     )
+    mocker.patch("src.main.PlaywrightMCP")
+    mocker.patch("src.main.ValidationBrowser")
+    extractor = mocker.patch("src.main.Extractor")
+    extractor.return_value.run_step.return_value = _statements()
 
     result = CliRunner().invoke(app, [str(markdown_path)])
+    return result, tmp_path / "output" / "automation"
+
+
+@pytest.mark.usefixtures("isolated_settings_env")
+def test_cli_runs_the_full_pipeline_offline(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    """The CLI runs end to end and writes both artifacts, with no network.
+
+    MCP and the validation browser are both faked, so this exercises the real
+    wiring without a server (non-functional req 7).
+    """
+    result, output_dir = _run_cli(mocker, tmp_path, _SMOKE_SCRIPT)
 
     assert result.exit_code == 0, result.output
 
-    output_dir = tmp_path / "output" / "automation"
-    script_path = output_dir / "case.py"
-    json_path = output_dir / "case.json"
-    assert script_path.exists()
-    script = script_path.read_text(encoding="utf-8")
-    assert 'page.locator("css=#login")' in script
-    assert "_dismiss_overlays(page)" in script
+    script = (output_dir / "case.py").read_text(encoding="utf-8")
+    assert _CLICK in script
+    assert "def test_smoke_test(page: Page)" in script
 
-    assert json_path.exists()
-    output = json.loads(json_path.read_text(encoding="utf-8"))
-    identifier = output["modules"][0]["execution_steps"][0]["extracted_data"][0]
-    assert identifier["identifier_tracking"] == "#login"
+    persisted = json.loads((output_dir / "case.json").read_text(encoding="utf-8"))
+    statements = persisted["modules"][0]["execution_steps"][0]["statements"]
+    assert statements[0]["code"] == _CLICK
+
+
+@pytest.mark.usefixtures("isolated_settings_env")
+def test_a_generation_failure_keeps_the_validated_json(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    """Validation is the expensive part, so its JSON is on disk before generation."""
+    result, output_dir = _run_cli(mocker, tmp_path, "not a script at all")
+
+    assert result.exit_code == 1
+    assert (output_dir / "case.json").exists()
+    assert not (output_dir / "case.py").exists()
+
+
+def test_both_browsers_are_reset_before_a_retry() -> None:
+    """Without this the agent retries against its own failed attempt.
+
+    The MCP browser would still be carrying, say, an accepted cookie
+    banner -- so the agent never sees the banner again and cannot produce
+    the dismissal the generated script needs.
+    """
+    extractor = MagicMock(spec=Extractor)
+    extractor.run_step.side_effect = [_statements(), _statements()]
+    validator = MagicMock(spec=Validator)
+    validator.run.side_effect = [
+        StepVerdict(is_valid=False, reason="cookie banner blocked the click"),
+        StepVerdict(is_valid=True),
+    ]
+    mcp, browser = _browsers()
+
+    _extract_step(_MODULE, 0, extractor, validator, mcp, browser, [])
+
+    mcp.reset.assert_called_once()
+    browser.reset.assert_called_once()
+    mcp.call_tool.assert_called_once_with(
+        "browser_navigate", {"url": "https://example.com/login"}
+    )
+
+
+def test_the_validated_prefix_is_replayed_after_a_reset() -> None:
+    """Resetting discards earlier steps too, so they must be re-applied."""
+    extractor = MagicMock(spec=Extractor)
+    extractor.run_step.side_effect = [_statements(), _statements()]
+    validator = MagicMock(spec=Validator)
+    validator.run.side_effect = [
+        StepVerdict(is_valid=False, reason="nope"),
+        StepVerdict(is_valid=True),
+    ]
+    mcp, browser = _browsers()
+    history = ['page.goto("https://example.com")']
+
+    _extract_step(_MODULE, 0, extractor, validator, mcp, browser, history)
+
+    replayed = browser.run.call_args[0][0]
+    assert [s.code for s in replayed] == history
+
+
+def test_no_reset_happens_when_the_step_passes() -> None:
+    """Resetting costs a reconnect and a page load; don't pay it needlessly."""
+    extractor = MagicMock(spec=Extractor)
+    extractor.run_step.return_value = _statements()
+    validator = MagicMock(spec=Validator)
+    validator.run.return_value = StepVerdict(is_valid=True)
+    mcp, browser = _browsers()
+
+    _extract_step(_MODULE, 0, extractor, validator, mcp, browser, [])
+
+    mcp.reset.assert_not_called()
+    browser.reset.assert_not_called()

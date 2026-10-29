@@ -1,1 +1,1 @@
-"""Level 3: turn a validated Level 2 test case into an executable script."""
+"""Generator: turn a validated test case into an executable script."""
