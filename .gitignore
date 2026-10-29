@@ -81,3 +81,5 @@ dmypy.json
 # Generated pipeline artifacts
 .playwright-mcp
 output/
+
+.DS_Store
