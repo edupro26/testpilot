@@ -79,4 +79,5 @@ dmypy.json
 .ruff_cache/
 
 # Generated pipeline artifacts
+.playwright-mcp
 output/

@@ -1,30 +1,29 @@
-"""The test case JSON contract, shared across Level 1 and Level 2.
+"""The test case JSON contract, shared across the pipeline stages.
 
-Level 1 and Level 2 aren't separate schemas -- they differ only in whether
-`extracted_data` has been filled in yet (empty from the Structurer,
-populated by the Extractor/Validator).
+The structured and validated test cases aren't separate schemas -- they
+differ only in whether `statements` has been filled in yet (empty from the
+Structurer, populated by the Extractor and proven by the Validator).
 """
 
 from pydantic import BaseModel, Field
 
-from src.model.enums import ElementType, IdentifierType
 
+class StepStatement(BaseModel):
+    """One validated Playwright statement belonging to an execution step.
 
-class ExtractedData(BaseModel):
-    """A single UI element identifier extracted for one execution step."""
+    `code` is always a line Playwright MCP emitted, never one the LLM wrote.
+    """
 
-    type: ElementType
-    request_description: str
-    identifier_type: IdentifierType
-    identifier_tracking: str
-    input_value: str | None = None
+    code: str
+    # why this line was accepted; informational only.
+    reason: str = ""
 
 
 class ExecutionStep(BaseModel):
     """A single step within a module."""
 
     step: str
-    extracted_data: list[ExtractedData] = Field(default_factory=list)
+    statements: list[StepStatement] = Field(default_factory=list)
 
 
 class Module(BaseModel):

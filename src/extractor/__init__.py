@@ -1,1 +1,1 @@
-"""Level 2: crawl a module's page and select each step's element identifiers."""
+"""Extractor: drive each step in a live browser and collect the code it ran."""

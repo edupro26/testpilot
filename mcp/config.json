@@ -1,0 +1,20 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "isolated": true,
+    "launchOptions": {
+      "headless": true
+    },
+    "contextOptions": {
+      "locale": "en-US"
+    }
+  },
+  "server": {
+    "port": 8931
+  },
+  "capabilities": [
+    "testing"
+  ],
+  "codegen": "python",
+  "outputDir": ".playwright-mcp"
+}

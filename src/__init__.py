@@ -1,1 +1,1 @@
-"""Test-Script-AI-Generator: GenAI-powered test script generation."""
+"""TestPilot: GenAI-powered test script generation."""

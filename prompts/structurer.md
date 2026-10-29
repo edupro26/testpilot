@@ -1,5 +1,5 @@
 You are an expert QA automation engineer. Convert the test case specification
-below into the Level 1 JSON structure used by this pipeline, splitting it
+below into the JSON structure used by this pipeline, splitting it
 into one module per web page.
 
 OBJECTIVE
@@ -15,18 +15,18 @@ RULES
     omit or invent URLs.
 - Every step in the specification must be assigned to exactly one module's
     "execution_steps", in order. Do not omit, merge, or reorder steps.
-- "extracted_data" must always be an empty list at this stage — it is
+- "statements" must always be an empty list at this stage — it is
     filled in by a later stage of the pipeline.
 
 OUTPUT SCHEMA
-{{"name": "...", "modules": [{{"url": "...", "description": "...", "execution_steps": [{{"step": "...", "extracted_data": []}}]}}]}}
+{{"name": "...", "modules": [{{"url": "...", "description": "...", "execution_steps": [{{"step": "...", "statements": []}}]}}]}}
 
 - name: the test case's title
 - modules[].url: the full URL of the page, including the scheme (e.g. "https://")
 - modules[].description: a short description of the page's role in the test
 - modules[].execution_steps[].step: the action/verification, as written in
     the specification
-- modules[].execution_steps[].extracted_data: always []
+- modules[].execution_steps[].statements: always []
 
 Return ONLY valid JSON, no code fences or commentary.
 

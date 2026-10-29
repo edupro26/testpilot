@@ -3,8 +3,9 @@
 import logging
 import time
 from collections.abc import Callable
+from typing import TypeVar
 
-from src.llm.protocol import LLMProvider
+from src.llm.protocol import Conversation, LLMProvider, ToolResult, ToolUseResponse
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +14,18 @@ _MAX_ATTEMPTS = 3
 _EXPONENTIAL_FACTOR = 2.0
 
 
-class RetryingLLMProvider:
-    """Wraps an LLMProvider, retrying `complete()` on rate-limit errors.
+T = TypeVar("T")
 
-    Every other exception is re-raised immediately, unretried.
+
+def _is_rate_limit(exc: Exception) -> bool:
+    """Whether `exc` looks like an HTTP 429 from any provider SDK."""
+    return getattr(exc, "status_code", None) == 429
+
+
+class RetryingLLMProvider:
+    """Wraps an LLMProvider, retrying `complete()` and conversation turns.
+
+    Only rate-limit errors are retried; anything else is re-raised at once.
     """
 
     def __init__(
@@ -60,18 +69,52 @@ class RetryingLLMProvider:
             Exception: Whatever `provider.complete` raises, after retries are
                 exhausted or immediately for a non-rate-limit error.
         """
+        return self._with_retry(
+            lambda: self.provider.complete(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                json_mode=json_mode,
+            )
+        )
+
+    def start_conversation(
+        self, *, system_prompt: str, user_prompt: str, tools: list[dict]
+    ) -> "RetryingConversation":
+        """Start a conversation whose every turn is retry-protected.
+
+        Args:
+            system_prompt: Instructions framing the model's role/behavior.
+            user_prompt: The opening user turn.
+            tools: Tool definitions in the neutral MCP shape.
+
+        Returns:
+            The provider's conversation, wrapped for retries.
+        """
+        conversation = self.provider.start_conversation(
+            system_prompt=system_prompt, user_prompt=user_prompt, tools=tools
+        )
+        return RetryingConversation(conversation, self._with_retry)
+
+    def _with_retry(self, call: Callable[[], T]) -> T:
+        """Run `call`, retrying with exponential backoff on rate limits.
+
+        Args:
+            call: The provider operation to attempt.
+
+        Returns:
+            Whatever `call` returns.
+
+        Raises:
+            Exception: Whatever `call` raises, after retries are exhausted
+                or immediately for a non-rate-limit error.
+        """
         delay = self._base_delay
         attempt = 1
         while True:
             try:
-                return self.provider.complete(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    json_mode=json_mode,
-                )
+                return call()
             except Exception as exc:
-                is_rate_limit = getattr(exc, "status_code", None) == 429
-                if not is_rate_limit or attempt >= self._max_attempts:
+                if not _is_rate_limit(exc) or attempt >= self._max_attempts:
                     raise
                 logger.warning(
                     "Rate limited (attempt %d/%d), retrying in %.0fs",
@@ -82,3 +125,25 @@ class RetryingLLMProvider:
                 self._sleep(delay)
                 delay *= self._exponential_factor
                 attempt += 1
+
+
+class RetryingConversation:
+    """Wraps a Conversation so each turn inherits rate-limit retries."""
+
+    def __init__(
+        self,
+        conversation: Conversation,
+        with_retry: Callable[[Callable[[], ToolUseResponse]], ToolUseResponse],
+    ) -> None:
+        """Initialize the wrapper.
+
+        Args:
+            conversation: The provider conversation to protect.
+            with_retry: The owning provider's retry helper.
+        """
+        self.conversation = conversation
+        self._with_retry = with_retry
+
+    def send(self, results: list[ToolResult] | None = None) -> ToolUseResponse:
+        """Delegate to `conversation.send`, retrying on rate-limit errors."""
+        return self._with_retry(lambda: self.conversation.send(results))

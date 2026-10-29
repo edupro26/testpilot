@@ -9,8 +9,8 @@ class StructurerError(PipelineError):
     """Raised when the Structurer cannot produce a valid TestCase."""
 
 
-class CrawlerError(PipelineError):
-    """Raised when the Crawler fails to execute a crawl."""
+class McpError(PipelineError):
+    """Raised when the Playwright MCP server is unreachable or misbehaves."""
 
 
 class ExtractorError(PipelineError):
@@ -19,6 +19,10 @@ class ExtractorError(PipelineError):
 
 class ValidatorError(PipelineError):
     """Raised when the Validator cannot produce a valid ValidationResult."""
+
+
+class GeneratorError(PipelineError):
+    """Raised when the Generator cannot produce a valid test script."""
 
 
 class ConfigurationError(ValueError):
