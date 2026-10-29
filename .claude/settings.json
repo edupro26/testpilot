@@ -1,18 +1,62 @@
 {
+  "model": "opus",
+  "effortLevel": "high",
   "permissions": {
+    "defaultMode": "auto",
     "allow": [
       "Bash(uv *)",
       "Bash(ruff *)",
-      "Bash(pytest *)"
+      "Bash(pytest *)",
+      "Bash(npx @playwright/mcp@latest *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch --list *)",
+      "Bash(git rev-parse *)",
+      "Bash(git rev-list *)",
+      "Bash(git fetch *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh issue view *)",
+      "Bash(gh issue list *)",
+      "WebFetch(domain:playwright.dev)",
+      "WebFetch(domain:github.com)"
     ],
     "ask": [
       "Bash(git commit *)",
       "Bash(git push *)",
-      "Bash(rm *)"
+      "Bash(rm *)",
+      "Bash(uv add *)",
+      "Bash(uv remove *)",
+      "Bash(uv lock --upgrade*)",
+      "Bash(uv run python -m src.main *)",
+      "Bash(git reset *)",
+      "Bash(git rebase *)",
+      "Bash(git merge *)",
+      "Bash(git restore *)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- *)",
+      "Bash(git branch -D *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge *)",
+      "Read(.env.example)",
+      "Bash(cat .env.example)",
+      "Edit(mcp/config.json)"
     ],
     "deny": [
       "Read(.env)",
-      "Read(./secrets/**)"
+      "Edit(.env)",
+      "Read(./secrets/**)",
+      "Edit(uv.lock)",
+      "Bash(pip *)",
+      "Bash(pip3 *)",
+      "Bash(pip3.13 *)",
+      "Bash(python -m pip *)",
+      "Bash(python3 -m pip *)",
+      "Bash(uv pip *)"
     ],
     "disableBypassPermissionsMode": "disable"
   },
@@ -21,14 +65,29 @@
     "pr": ""
   },
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/ruff-on-edit.sh\"",
+            "timeout": 30,
+            "statusMessage": "Formatting with Ruff..."
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python -c \"import json,sys,re; d=json.load(sys.stdin); c=(d.get('tool_input') or {}).get('command','') or ''; deny = re.search(r'\\bpip[0-9.]*\\s+install\\b', c) and not re.search(r'\\buv\\s+pip[0-9.]*\\s+install\\b', c); print(json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'deny','permissionDecisionReason':'This project is uv-only per AGENTS.md - use uv add / uv pip install instead of bare pip.'}})) if deny else print('{}')\"",
-            "statusMessage": "Checking for pip usage..."
+            "if": "Bash(git commit *)",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-before-commit.sh\"",
+            "timeout": 180,
+            "statusMessage": "Running lint and tests before commit..."
           }
         ]
       }
