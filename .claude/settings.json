@@ -4,10 +4,14 @@
   "permissions": {
     "defaultMode": "auto",
     "allow": [
-      "Bash(uv *)",
-      "Bash(ruff *)",
-      "Bash(pytest *)",
-      "Bash(npx @playwright/mcp@latest *)",
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(npm ls *)",
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npx prettier *)",
+      "Bash(npx vitest *)",
+      "Bash(npx playwright test *)",
       "Bash(git status *)",
       "Bash(git diff *)",
       "Bash(git log *)",
@@ -29,10 +33,12 @@
       "Bash(git commit *)",
       "Bash(git push *)",
       "Bash(rm *)",
-      "Bash(uv add *)",
-      "Bash(uv remove *)",
-      "Bash(uv lock --upgrade*)",
-      "Bash(uv run python -m src.main *)",
+      "Bash(npm install *)",
+      "Bash(npm uninstall *)",
+      "Bash(npm update *)",
+      "Bash(node src/main.ts *)",
+      "Bash(npm run testpilot *)",
+      "Bash(testpilot *)",
       "Bash(git reset *)",
       "Bash(git rebase *)",
       "Bash(git merge *)",
@@ -43,20 +49,13 @@
       "Bash(gh pr create *)",
       "Bash(gh pr merge *)",
       "Read(.env.example)",
-      "Bash(cat .env.example)",
-      "Edit(mcp/config.json)"
+      "Bash(cat .env.example)"
     ],
     "deny": [
       "Read(.env)",
       "Edit(.env)",
       "Read(./secrets/**)",
-      "Edit(uv.lock)",
-      "Bash(pip *)",
-      "Bash(pip3 *)",
-      "Bash(pip3.13 *)",
-      "Bash(python -m pip *)",
-      "Bash(python3 -m pip *)",
-      "Bash(uv pip *)"
+      "Edit(package-lock.json)"
     ],
     "disableBypassPermissionsMode": "disable"
   },
@@ -71,9 +70,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/ruff-on-edit.sh\"",
-            "timeout": 30,
-            "statusMessage": "Formatting with Ruff..."
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/format-on-edit.sh\"",
+            "timeout": 60,
+            "statusMessage": "Formatting with Prettier and ESLint..."
           }
         ]
       }
@@ -87,7 +86,7 @@
             "if": "Bash(git commit *)",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-before-commit.sh\"",
             "timeout": 180,
-            "statusMessage": "Running lint and tests before commit..."
+            "statusMessage": "Running type-check, lint and tests before commit..."
           }
         ]
       }

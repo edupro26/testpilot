@@ -2,11 +2,11 @@ Perform ONE test step in the live browser you are connected to, using the
 Playwright MCP tools, then report the Playwright code that step required.
 
 THE STEP
-{step}
+{{step}}
 
 CURRENT STATE
-{context}
-{feedback_section}
+{{context}}
+{{feedback_section}}
 HOW TO WORK
 - Use `browser_find` to locate elements and read their `ref`. It returns
     only the matching part of the page, which is far cheaper than a full
@@ -48,7 +48,7 @@ will.
 
 - `target` accepts either a snapshot `ref` or a CSS selector. A `ref`
     produces a role/text locator; a CSS selector produces
-    `page.locator("<selector>")`.
+    `page.locator('<selector>')`.
 - If feedback says a statement resolved to nothing in a clean browser, the
     element's accessible name probably differs there -- many cookie
     banners are translated by the server, so a button reading "Allow all"
@@ -71,7 +71,9 @@ Call `step_done` when the step is complete.
     reformat, merge, split or invent code.
 - Report only the lines that belong to this step, in execution order.
     Leave out exploratory detours: failed attempts, and anything emitted by
-    `browser_find` or `browser_snapshot`.
+    `browser_find`, `browser_snapshot` or `browser_evaluate`.
+- Report code lines only. A comment line in the block (such as
+    `// Press Tab`) is not a statement.
 - If the step needs no browser interaction at all (for example, it only
     restates where the browser already is), call `step_done` with an empty
     `statements` list.

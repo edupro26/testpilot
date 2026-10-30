@@ -1,25 +1,24 @@
 # TestPilot
 
-TestPilot (alpha) turns a test case written in markdown into an executable Playwright (Python) test script, using an LLM.
+TestPilot (alpha) turns a test case written in markdown into an executable Playwright (TypeScript) test script, using an LLM.
 
-An LLM agent performs each step of the test case in a real browser through [Playwright MCP](https://github.com/microsoft/playwright-mcp) and keeps only the code Playwright reports running. Each step's code is then replayed in a clean browser and checked by the LLM before it is accepted. The validated code is assembled into a `pytest-playwright` test.
+An LLM agent performs each step of the test case in a real browser through [Playwright MCP](https://github.com/microsoft/playwright-mcp) and keeps only the code Playwright reports running. Each step's code is then replayed in a clean browser and checked by the LLM before it is accepted. The validated code is assembled into a Playwright Test (`@playwright/test`) spec.
 
 - [Application description](docs/APP_DESCRIPTION.md): architecture, pipeline stages, requirements and design decisions
 - [Roadmap](docs/ROADMAP.md): what is planned next
 
 ## Prerequisites
 
-- Python ≥3.13 and [uv](https://docs.astral.sh/uv/)
-- Node.js 18 or newer (for `npx`, to run the Playwright MCP server)
+- Node.js 24 or newer (runs the TypeScript sources directly)
 - An Azure OpenAI deployment (or `LLM_PROVIDER=mock` for offline runs)
 
 ## Setup
 
 ```bash
-uv sync --locked --dev                                          # install dependencies
-uv run playwright install chromium                              # browser for validation and the generated tests
-npx @playwright/mcp@latest install-browser chrome-for-testing   # browser for the Playwright MCP server
-cp .env.example .env                                            # then fill in your settings
+npm ci                                # install dependencies
+npx playwright install chromium       # browser for Playwright MCP, validation and the generated tests
+npm link                              # put the `testpilot` command on your PATH
+cp .env.example .env                  # then fill in your settings
 ```
 
 ### Configuration
@@ -34,37 +33,31 @@ Settings are read from the environment or `.env`:
 | `AZURE_DEPLOYMENT_NAME` | Azure deployment name |
 | `AZURE_MODEL_NAME` | Model name behind the deployment |
 | `OPENAI_API_VERSION` | Azure OpenAI API version |
-| `BROWSER_LOCALE` | Locale of the validation browser and the generated script (default `en-US`); must match `mcp/config.json` |
-| `MCP_URL` | Playwright MCP server URL (default `http://localhost:8931/mcp`) |
+| `BROWSER_LOCALE` | Locale of all three browsers: Playwright MCP's, the validation browser and the generated script's (default `en-US`) |
 | `MCP_MAX_TURNS` | Maximum agent turns per step (default `25`) |
 | `LOG_LEVEL` | Logging level (default `INFO`) |
 
 ## Usage
 
-1. Start the Playwright MCP server in a separate terminal and leave it running:
+1. Run the pipeline on a test case. Playwright MCP runs inside the application, so there is no server to start first:
 
     ```bash
-    npx @playwright/mcp@latest --config ./mcp/config.json
-    ```
-
-2. Run the pipeline on a test case:
-
-    ```bash
-    uv run python -m src.main examples/automation/test_login_incorrect_credentials.md
+    testpilot examples/automation/test_login_incorrect_credentials.md
     ```
 
     It writes the validated test case and the generated script to `output/<folder>/`, named after the input file:
 
     ```
     output/automation/test_login_incorrect_credentials.json
-    output/automation/test_login_incorrect_credentials.py
+    output/automation/test_login_incorrect_credentials.spec.ts
     ```
 
-3. Run the generated test:
+2. Run the generated test:
 
     ```bash
-    uv run pytest output/automation/test_login_incorrect_credentials.py           # headless
-    uv run pytest output/automation/test_login_incorrect_credentials.py --headed  # watch it run
+    npx playwright test output/automation/test_login_incorrect_credentials.spec.ts            # headless
+    npx playwright test output/automation/test_login_incorrect_credentials.spec.ts --headed   # watch it run
+    npx playwright show-report                                                               # open the HTML report of the last run
     ```
 
 ### Writing a test case
@@ -88,9 +81,11 @@ urls = ["https://www.saucedemo.com/", "https://www.saucedemo.com/inventory.html"
 ## Development
 
 ```bash
-uv run ruff check --fix .   # lint
-uv run ruff format .        # format
-uv run pytest -q            # run the test suite (offline: mock LLM, fake MCP server)
+npm run typecheck   # type-check (tsc)
+npm run lint        # lint (ESLint)
+npm run format      # format (Prettier)
+npm test            # run the test suite (offline: mock LLM, fake MCP server)
+npm run check       # all of the above, without writing
 ```
 
-Lint and tests must pass before committing. Code conventions are in [AGENTS.md](AGENTS.md).
+Type-check, lint, format and tests must pass before committing. Code conventions are in [AGENTS.md](AGENTS.md).

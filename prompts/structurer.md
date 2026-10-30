@@ -19,7 +19,7 @@ RULES
     filled in by a later stage of the pipeline.
 
 OUTPUT SCHEMA
-{{"name": "...", "modules": [{{"url": "...", "description": "...", "execution_steps": [{{"step": "...", "statements": []}}]}}]}}
+{"name": "...", "modules": [{"url": "...", "description": "...", "execution_steps": [{"step": "...", "statements": []}]}]}
 
 - name: the test case's title
 - modules[].url: the full URL of the page, including the scheme (e.g. "https://")
@@ -31,4 +31,4 @@ OUTPUT SCHEMA
 Return ONLY valid JSON, no code fences or commentary.
 
 Test case specification:
-{test_case_markdown}
+{{test_case_markdown}}
