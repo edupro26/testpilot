@@ -2,8 +2,8 @@
 
 import type { LLMProvider } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
-import type { Module, StepStatement } from '../model/test-case.ts';
-import { StepAgent } from './agent.ts';
+import type { Module } from '../model/test-case.ts';
+import { StepAgent, type StepCheck, type StepResult } from './agent.ts';
 import type { McpConnection } from './mcp/server.ts';
 import { describeBrowserContext } from './utils.ts';
 
@@ -16,11 +16,8 @@ export interface RunStepOptions {
     history: string[];
     /** Why the previous attempt at this step was rejected. */
     feedback?: string;
-    /**
-     * The URL a freshly reset MCP browser was sent to, when retrying. Earlier
-     * steps' state is then gone from it.
-     */
-    resetTo?: string;
+    /** Checks each report against what the step asks. */
+    check?: StepCheck;
 }
 
 /** Performs a module's steps in a live browser, collecting the code. */
@@ -43,16 +40,17 @@ export class Extractor {
      *
      * @param module - The module the step belongs to.
      * @param index - The step's position within `module.execution_steps`.
-     * @param options - Earlier statements, and retry feedback and reset URL.
-     * @returns The step's statements, in execution order.
+     * @param options - Earlier statements, retry feedback and the check.
+     * @returns The step's statements, in execution order, with the last
+     *   rejection if the agent could not fix it.
      * @throws {ExtractorError} If the step cannot be completed or the model
      *   reports code MCP never ran.
      */
     runStep(
         module: Module,
         index: number,
-        { history, feedback, resetTo }: RunStepOptions,
-    ): Promise<StepStatement[]> {
+        { history, feedback, check }: RunStepOptions,
+    ): Promise<StepResult> {
         const step = module.execution_steps[index];
         if (step === undefined) {
             throw new RangeError(`Module ${module.url} has no step ${index}`);
@@ -61,8 +59,9 @@ export class Extractor {
             `Extracting step ${index + 1}/${module.execution_steps.length} of ${module.url}`,
         );
         return this.agent.run(step.step, {
-            context: describeBrowserContext(module, history, resetTo),
+            context: describeBrowserContext(module, history),
             feedback,
+            check,
         });
     }
 }

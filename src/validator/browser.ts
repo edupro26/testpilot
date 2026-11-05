@@ -1,9 +1,10 @@
 /**
  * The validation browser: runs validated statements, and nothing else.
  *
- * The pipeline's ground truth. Unlike the MCP browser, it carries no failed
- * attempts or implicit waits, and runs exactly what the Generator will ship.
- * State is cumulative across steps, as in the finished script.
+ * The pipeline's ground truth: no failed attempts or implicit waits, exactly
+ * the code the Generator will ship. Every statement is timed and may wait up
+ * to a ceiling, so late content is measured rather than failed. State is
+ * cumulative across runs until a reset.
  */
 
 import {
@@ -17,130 +18,148 @@ import {
 import { compileStatement } from '../extractor/utils.ts';
 import { logger } from '../logger.ts';
 import type { StepStatement } from '../model/test-case.ts';
+import { trim } from './utils.ts';
+
+// How long any action or assertion may wait in a replay: Playwright MCP's own
+// limit on `browser_wait_for`.
+const REPLAY_TIMEOUT_MS = 30_000;
+
+/** Chromium arguments for both pipeline browsers, so a page behaves the same. */
+export const CHROMIUM_ARGS: readonly string[] = [
+    '--disable-blink-features=AutomationControlled',
+];
 
 /** Raised when a statement fails to execute against the live page. */
 export class BrowserError extends Error {
     override name = 'BrowserError';
     readonly code: string;
     readonly reason: string;
-    readonly ran: string[];
+    readonly durations: number[];
 
     /**
      * Initialize with the offending statement and Playwright's reason.
      *
      * @param code - The statement that failed.
      * @param reason - Playwright's error message, trimmed.
-     * @param ran - Statements that ran before it in the same call.
+     * @param durations - How long each statement before it took, in ms.
      * @param options - The underlying error, as `cause`.
      */
     constructor(
         code: string,
         reason: string,
-        ran: string[] = [],
+        durations: number[] = [],
         options?: ErrorOptions,
     ) {
         super(`${code}\n${reason}`, options);
         this.code = code;
         this.reason = reason;
-        this.ran = ran;
+        this.durations = durations;
     }
+}
+
+/**
+ * Execute `statements` against `page`, in order, each action and assertion
+ * waiting up to `timeoutMs`.
+ *
+ * @returns How long each statement took, in ms.
+ * @throws {BrowserError} If a statement fails on the page. Errors in the code
+ *   itself (a syntax error, a name not in scope) propagate as they are.
+ */
+export async function runStatements(
+    page: Page,
+    statements: StepStatement[],
+    timeoutMs = REPLAY_TIMEOUT_MS,
+): Promise<number[]> {
+    page.setDefaultTimeout(timeoutMs);
+    const patient = expect.configure({ timeout: timeoutMs });
+    const durations: number[] = [];
+    for (const statement of statements) {
+        const execute = compileStatement(statement.code);
+        const started = performance.now();
+        try {
+            await execute(page, patient);
+        } catch (error) {
+            if (error instanceof ReferenceError || error instanceof TypeError) {
+                throw error;
+            }
+            throw new BrowserError(statement.code, trim(String(error)), durations, {
+                cause: error,
+            });
+        }
+        durations.push(performance.now() - started);
+        logger.debug(`Replayed: ${statement.code}`);
+    }
+    return durations;
 }
 
 /** Options for `ValidationBrowser.launch`. */
 export interface LaunchOptions {
     /** Whether to run the browser headless. */
     headless?: boolean;
-    /**
-     * The context locale (`Accept-Language`); must match the MCP browser and the
-     * generated script.
-     */
+    /** The context locale; must match the MCP browser and the generated script. */
     locale?: string;
+    /** How long any action or assertion may wait, in ms. */
+    timeoutMs?: number;
 }
 
 /** What the Validator needs from the browser that replays its statements. */
 export interface ReplayBrowser {
-    /** The page statements are replayed against. */
-    readonly page: Pick<Page, 'url' | 'title'>;
-    /** Execute `statements` against the live page, in order. */
-    run(statements: StepStatement[]): Promise<void>;
+    /** Execute `statements` in order; resolves to how long each took, in ms. */
+    run(statements: StepStatement[]): Promise<number[]>;
+    /** Discard all state, leaving a blank page. */
+    reset(): Promise<void>;
 }
 
 /** A live Playwright page replaying validated statements. */
 export class ValidationBrowser implements ReplayBrowser, AsyncDisposable {
     private readonly browser: Browser;
     private readonly locale: string;
+    private readonly timeoutMs: number;
     private context: BrowserContext;
-    private currentPage: Page;
+    private page: Page;
 
     private constructor(
         browser: Browser,
         locale: string,
+        timeoutMs: number,
         context: BrowserContext,
         page: Page,
     ) {
         this.browser = browser;
         this.locale = locale;
+        this.timeoutMs = timeoutMs;
         this.context = context;
-        this.currentPage = page;
+        this.page = page;
     }
 
-    /**
-     * Launch the validation browser.
-     *
-     * @param options - Headless mode and locale.
-     * @returns The browser, on a blank page.
-     */
+    /** Launch the validation browser, on a blank page. */
     static async launch({
         headless = true,
         locale = 'en-US',
+        timeoutMs = REPLAY_TIMEOUT_MS,
     }: LaunchOptions = {}): Promise<ValidationBrowser> {
-        const browser = await chromium.launch({ headless });
+        const browser = await chromium.launch({ headless, args: [...CHROMIUM_ARGS] });
         const context = await browser.newContext({ locale });
         const page = await context.newPage();
         logger.debug(`Validation browser launched (locale=${locale})`);
-        return new ValidationBrowser(browser, locale, context, page);
-    }
-
-    /** The page statements are replayed against. */
-    get page(): Page {
-        return this.currentPage;
+        return new ValidationBrowser(browser, locale, timeoutMs, context, page);
     }
 
     /**
      * Execute `statements` against the live page, in order.
      *
-     * Each statement runs with only `page` and `expect` in scope.
-     *
-     * @param statements - The step's statements, as collected.
-     * @throws {BrowserError} If a statement fails on the page. The error names
-     *   the statement and Playwright's reason, which is fed back to the agent
-     *   as retry feedback. Errors in the code itself (it does not parse, or
-     *   uses a name that is not in scope) propagate as they are.
+     * @returns How long each statement took, in ms.
+     * @throws {BrowserError} If a statement fails on the page.
      */
-    async run(statements: StepStatement[]): Promise<void> {
-        const ran: string[] = [];
-        for (const statement of statements) {
-            const execute = compileStatement(statement.code);
-            try {
-                await execute(this.currentPage, expect);
-            } catch (error) {
-                if (error instanceof ReferenceError || error instanceof TypeError) {
-                    throw error;
-                }
-                throw new BrowserError(statement.code, trim(String(error)), ran, {
-                    cause: error,
-                });
-            }
-            ran.push(statement.code);
-            logger.debug(`Replayed: ${statement.code}`);
-        }
+    run(statements: StepStatement[]): Promise<number[]> {
+        return runStatements(this.page, statements, this.timeoutMs);
     }
 
-    /** Discard all state, cookies included, to re-run a prefix after a failure. */
+    /** Discard all state, cookies included. */
     async reset(): Promise<void> {
         await this.context.close();
         this.context = await this.browser.newContext({ locale: this.locale });
-        this.currentPage = await this.context.newPage();
+        this.page = await this.context.newPage();
         logger.debug('Validation browser reset');
     }
 
@@ -154,12 +173,4 @@ export class ValidationBrowser implements ReplayBrowser, AsyncDisposable {
     async [Symbol.asyncDispose](): Promise<void> {
         await this.close();
     }
-}
-
-/** Trim a Playwright error, which can carry a very long call log. */
-function trim(message: string, limit = 1200): string {
-    const trimmed = message.trim();
-    return trimmed.length <= limit
-        ? trimmed
-        : `${trimmed.slice(0, limit)}\n... (truncated)`;
 }

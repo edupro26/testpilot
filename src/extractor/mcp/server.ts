@@ -9,10 +9,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createConnection } from '@playwright/mcp';
-import { chromium } from '@playwright/test';
+import { type BrowserContext, chromium, type Page } from '@playwright/test';
 
 import { errorMessage, McpError } from '../../exceptions.ts';
 import { logger } from '../../logger.ts';
+import type { StepStatement } from '../../model/test-case.ts';
+import { CHROMIUM_ARGS, runStatements } from '../../validator/browser.ts';
 import {
     ALLOWED_TOOLS,
     CALL_TIMEOUT_MS,
@@ -30,6 +32,8 @@ export type McpConfig = NonNullable<Parameters<typeof createConnection>[0]>;
 export interface McpServer {
     connect(transport: Transport): Promise<void>;
     close(): Promise<void>;
+    /** The browser context the server drives, when the pipeline owns it. */
+    readonly context?: BrowserContext;
 }
 
 /** Creates a fresh, unconnected MCP server; called once per session. */
@@ -119,8 +123,7 @@ export function playwrightServer(locale: string): ServerFactory {
     return async () => {
         const browser = await chromium.launch({
             headless: true,
-            // As Playwright MCP launches Chromium itself.
-            args: ['--disable-blink-features=AutomationControlled'],
+            args: [...CHROMIUM_ARGS],
         });
         try {
             const context = await browser.newContext({ locale });
@@ -128,6 +131,9 @@ export function playwrightServer(locale: string): ServerFactory {
                 Promise.resolve(context),
             );
             return {
+                // Playwright MCP adopts the context's pages as its tabs, so a
+                // page the pipeline drives is the agent's page too.
+                context,
                 connect: (transport) => server.connect(transport),
                 close: async () => {
                     await server.close();
@@ -262,6 +268,32 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
                 },
             );
         }
+    }
+
+    /**
+     * The agent's page: the session's newest, opened if it has none.
+     *
+     * @throws {McpError} If the session's server exposes no browser context.
+     */
+    async page(): Promise<Page> {
+        const context = this.session?.server.context;
+        if (context === undefined) {
+            throw new McpError(
+                'The MCP session exposes no browser context to run statements on',
+            );
+        }
+        return context.pages().at(-1) ?? (await context.newPage());
+    }
+
+    /**
+     * Run accepted statements on the agent's page, as the replay does, to
+     * restore the state a step starts from.
+     *
+     * @returns How long each statement took, in ms.
+     * @throws {BrowserError} If a statement fails on the page.
+     */
+    async run(statements: StepStatement[]): Promise<number[]> {
+        return runStatements(await this.page(), statements);
     }
 
     /** Shut the session and its browser down. */

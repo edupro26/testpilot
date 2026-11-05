@@ -2,7 +2,7 @@
 
 TestPilot is a GenAI enabler for quick test script generation and automation. It is an LLM-powered application that, based on a specification of a test case (.md), generates a Playwright (TypeScript) test script, which can then be executed to receive a test report. It is currently in alpha: the full pipeline works end to end, and the next features are tracked in the roadmap.
 
-The core idea: the LLM never writes test code from a static view of the page. It **drives a real browser** through [Playwright MCP](https://github.com/microsoft/playwright-mcp), one step at a time, and keeps only the code Playwright itself reports running. Every statement is then replayed in a second, clean browser before it is accepted, so the generated script contains only code that has already been proven against the live site.
+The core idea: the LLM never writes test code from a static view of the page. It **drives a real browser** through [Playwright MCP](https://github.com/microsoft/playwright-mcp), one step at a time, and keeps only the code Playwright itself reports running. The whole script is then replayed in a second, clean browser before it is generated, so it contains only code that has already been proven against the live site.
 
 What comes next is tracked in [ROADMAP.md](./ROADMAP.md).
 
@@ -10,7 +10,7 @@ What comes next is tracked in [ROADMAP.md](./ROADMAP.md).
 
 ![Application architecture](./images/application_architecture.png)
 
-The pipeline has three stages: the **Structurer** turns the markdown into a structured test case, the **Agent Loop** (Extractor, Playwright MCP, Validation Browser and Validator) works out and proves the code for each step, and the **Generator** assembles the validated code into a test script.
+The pipeline has four stages: the **Structurer** turns the markdown into a structured test case, the **Agent Loop** (Extractor, Playwright MCP and the Validator's semantic validation) works out the code for each step, **Script Validation** (the Validator and the Validation Browser) proves the whole script, sending a failing step back to the Agent Loop, and the **Generator** assembles the validated code into a test script.
 
 ## Domain Description
 
@@ -59,31 +59,46 @@ urls = ["https://www.saucedemo.com/", "https://www.saucedemo.com/inventory.html"
 
 **Input**: The structured test case
 
-Steps run one at a time, in order, across all modules. Both browsers stay open for the whole test case, so each step starts from the state the previous steps left behind.
+Every step is extracted one at a time, in order, across all modules. The agent's browser stays open between steps, so each step starts from the state the previous steps left behind.
 
 - `Extractor`: An LLM agent that performs the step in a live browser by
     calling Playwright MCP tools (find elements, click, type, verify, ...).
     Every successful tool call reports the exact Playwright code it ran
     (`codegen`). When done, the agent reports which of those lines belong
-    to the step. It never writes code itself: a line Playwright MCP did not
-    emit is rejected
+    to the step (`step_done`). It never writes code itself: a line
+    Playwright MCP did not emit is rejected
 - `Playwright MCP`: A Playwright MCP server running inside the application,
-    reached over an in-memory MCP transport. It owns the agent's browser,
+    reached over an in-memory MCP transport. It drives the agent's browser,
     which is a workspace: it also holds failed attempts and exploratory
     detours
+- `Validator` (**semantic validation**): Each `step_done` report is judged
+    straight away: the LLM is prompted to judge whether the code does what
+    the step asked (for example, that it verifies the right message rather
+    than any visible heading). On acceptance, it records a reason for each
+    statement and the agent moves on to the next step. A rejection goes back
+    to the agent with feedback, and the agent fixes the step in the same
+    conversation, its browser still live, up to two times
+
+**Output**: The test case with every step's statements filled in, not yet proven to run on their own
+
+### Script Validation
+
+**Input**: The test case with every step's statements
+
+Once all steps are done, the whole script is validated in one replay.
+
 - `Validation Browser`: A separate, clean Playwright browser that runs only
     accepted code. Its state is exactly what the generated script will
     produce
-- `Validator`: Module responsible for proving the step's code in two checks:
-    1. **Replay**: run the collected code in the Validation Browser. Any
-       error (an element not found, a locator matching several elements, a
-       failed assertion) rejects the step
-    2. **Semantic**: prompt the LLM to judge whether the code does what the
-       step asked (for example, that it verifies the right message rather
-       than any visible heading). On acceptance, it records a reason for
-       each statement
+- `Validator` (**script validation**): Reset the Validation Browser and
+    replay all steps back to back, as the script will run. Every action and
+    assertion may wait up to 30 seconds, and each assertion is timed: one
+    that needed longer than Playwright's 5-second default gets a `timeout`
+    of twice what it took (see *Waiting for late content*). The first error
+    (an element not found, a locator matching several elements, a failed
+    assertion) ends the round and is mapped back to its step
 
-A rejected step is retried **once**, with the rejection as feedback. Before the retry both browsers are reset: the Validation Browser re-runs every accepted statement, and Playwright MCP gets a fresh session opened at the same URL. If the retry is rejected too, the run aborts.
+If the replay fails at step N, that step is **re-extracted** in the Agent Loop with the failure as feedback, and only that step: the agent's browser is restored to the state before it by running the earlier steps' accepted code in a fresh session (see *Retry and reset*), the other steps keep their statements, and the whole script is validated again. A step the semantic validation still rejects once the agent's two repairs run out is re-extracted the same way. Every re-extraction spends one of 5 retries per run (`MAX_RETRIES` in `src/main.ts`); when they run out, the run aborts. Once all steps are validated, the test case goes to the Generator.
 
 **Output**: The validated test case in JSON format, saved to disk before generation
 
@@ -100,11 +115,24 @@ A rejected step is retried **once**, with the rejection as feedback. Before the 
                     "statements": [
                         {
                             "code": "await page.goto('http://automationexercise.com');",
-                            "reason": "Navigates the page to the requested URL ..."
+                            "reason": "Navigates the page to the requested URL ...",
+                            "type": "action"
                         },
                         {
                             "code": "await page.getByRole('button', { name: 'Consent' }).click();",
-                            "reason": "Dismisses the consent popup ..."
+                            "reason": "Dismisses the consent popup ...",
+                            "type": "action"
+                        }
+                    ]
+                },
+                {
+                    "step": "Verify that home page is visible successfully",
+                    "statements": [
+                        {
+                            "code": "await expect(page.getByRole('heading', { name: 'AutomationExercise' })).toBeVisible();",
+                            "reason": "Asserts the home page heading ...",
+                            "type": "assertion",
+                            "timeout": 12000
                         }
                     ]
                 }
@@ -114,6 +142,8 @@ A rejected step is retried **once**, with the rejection as feedback. Before the 
 }
 ```
 
+`type` is derived from the code (an `await expect(...)` is an assertion), never asked of the LLM. `timeout` (milliseconds) appears only on an assertion that needed longer than Playwright's default; `code` stays exactly what Playwright MCP emitted.
+
 ### Generator
 
 **Input**: The validated test case
@@ -121,10 +151,14 @@ A rejected step is retried **once**, with the rejection as feedback. Before the 
 - `Generator`: Module responsible for prompting the LLM to write the
     complete Playwright Test (`@playwright/test`) spec (header comment,
     import, test title, one comment per step) around the validated
-    statements and a fixed locale setting. The result must parse and must
-    contain every statement and the locale setting unchanged and in order;
-    otherwise the run fails. There is no retry, and the validated JSON is
-    already on disk
+    statements and fixed settings: the locale, and a test timeout when the
+    statements take long to run (see *Waiting for late content*). The LLM
+    also writes each assertion's measured timeout into its matcher, as the
+    prompt marks it: `toBeVisible()` becomes
+    `toBeVisible({ timeout: 12_000 })`. The result must parse and must
+    contain every statement and setting unchanged and in order, a timed
+    assertion with exactly its timeout added; otherwise the run fails. There
+    is no retry, and the validated JSON is already on disk
 
 **Output**: The executable test script file
 
@@ -146,7 +180,7 @@ test('Login user with incorrect credentials', async ({ page }) => {
   await page.getByRole('button', { name: 'Consent' }).click();
 
   // Verify that the home page is visible successfully
-  await expect(page.getByRole('heading', { name: 'AutomationExercise' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AutomationExercise' })).toBeVisible({ timeout: 12_000 });
   ...
 });
 ```
@@ -157,10 +191,10 @@ test('Login user with incorrect credentials', async ({ page }) => {
 1. Accept a markdown test-case specification file as CLI input.
 2. The Structurer converts the markdown into the structured test case via one LLM call.
 3. For each execution step, in order, the Extractor performs the step in a live browser through Playwright MCP, using only an allowlisted set of tools, and reports the code lines that belong to the step. Only lines emitted by a code-generating tool during that step are accepted.
-4. The Validator replays each step's code in the Validation Browser, then judges via an LLM call whether it accomplishes the step, before the step is accepted.
-5. On a rejection, both browsers are reset and the step is retried once with the rejection as feedback; a second rejection aborts the run with a `ValidatorError`. An Extractor failure (no completion within `MCP_MAX_TURNS`, a malformed report, or a line Playwright MCP never ran) aborts the run with an `ExtractorError`.
+4. The Validator judges each step's code via an LLM call as the agent reports it; a rejection is returned to the agent, which fixes it in the same conversation up to two times. Once every step is extracted, the Validator replays the whole script in a freshly reset Validation Browser, back to back, timing each assertion and giving one that needed longer than Playwright's default a measured `timeout`.
+5. A step that fails the replay, or that the semantic validation still rejects after the agent's repairs, is re-extracted with the failure as feedback, from the agent's browser restored to the state before the step; the other steps keep their statements. A run may re-extract at most 5 times (`MAX_RETRIES`); then it aborts with a `ValidatorError`. An Extractor failure (no completion within `MCP_MAX_TURNS`, a malformed report, or a line Playwright MCP never ran) aborts the run with an `ExtractorError`.
 6. Popups (cookie-consent banners, newsletters, surveys) are dismissed in the step that makes them appear, as ordinary validated statements. There is no site-specific or injected overlay handling.
-7. The Generator turns the validated test case into a single executable Playwright Test (TypeScript) spec, using the `page` fixture, with every validated statement copied unchanged. A script that drops or alters a statement or does not parse aborts the run with a `GeneratorError`.
+7. The Generator turns the validated test case into a single executable Playwright Test (TypeScript) spec, using the `page` fixture, with every validated statement copied unchanged but for its measured timeout. A script that drops or alters a statement or does not parse aborts the run with a `GeneratorError`.
 8. The CLI runs the full pipeline as a single command: `testpilot <path.md>` (after `npm link`; `npm run testpilot -- <path.md>` without it). Playwright is the only target framework.
 9. The pipeline writes the validated JSON and the generated script under `output/<input's parent folder name>/`, both named after the input file (e.g. `examples/automation/test_x.md` -> `output/automation/test_x.json` and `output/automation/test_x.spec.ts`). The JSON is written before generation, so a generation failure never loses it.
 10. The LLM provider is selectable via `LLM_PROVIDER`: `azure_openai` (the primary target) or `mock` (offline development and testing).
@@ -184,7 +218,7 @@ test('Login user with incorrect credentials', async ({ page }) => {
 
 The Extractor's LLM does not author Playwright code. It drives the browser, and Playwright MCP reports the code each successful action ran, which is the same generator Playwright's own `codegen` uses. The agent's only job at the end of a step is to *select* which of those lines belong to it, leaving out failed attempts and detours. A line that was never emitted is rejected, which is also the safety boundary around running code in the Validation Browser.
 
-Only tools whose emitted code is a self-contained test line are collectable (`COLLECTABLE_TOOLS` in `src/extractor/mcp/constants.ts`): navigation (including back), click, hover, drag, type, fill, select, key presses, waits, and the `browser_verify_*` assertions. Other tools (find, snapshot, evaluate, screenshots, resizing, file uploads, dialogs) still help the agent explore, but their code is never collected: they either emit no code, do not act on the page, or emit code that depends on a variable from an earlier line. Narrating comment lines in a tool's code (such as `// Press Tab`) are not statements.
+Only tools whose emitted code is a self-contained test line are collectable (`COLLECTABLE_TOOLS` in `src/extractor/mcp/constants.ts`): navigation (including back), click, hover, drag, type, fill, select, key presses, and the `browser_verify_*` assertions. Other tools (find, snapshot, evaluate, waits, screenshots, resizing, file uploads, dialogs) still help the agent explore, but their code is never collected: they either emit no code, do not act on the page, only wait in the agent's browser, or emit code that depends on a variable from an earlier line. A wait the agent reports anyway is left out of the step rather than failing it. Narrating comment lines in a tool's code (such as `// Press Tab`) are not statements.
 
 TypeScript is the one codegen language every Playwright MCP tool honours: tools outside Playwright's code generator emit hard-coded TypeScript whatever `codegen` says. The application, the Validation Browser and the generated script are all TypeScript, so the language a tool emits is never a reason to withhold its code.
 
@@ -196,15 +230,29 @@ Two traits of that generator show up in the scripts:
 
 The Playwright MCP browser is the agent's workspace and holds whatever the agent did while exploring. Playwright MCP also waits briefly after every action, and that wait is not in the emitted code. Code that works there is therefore not yet known to work on its own.
 
-The Validation Browser is the contract: plain Playwright running nothing but accepted code, each statement compiled into a function of `page` and `expect` only. Replay is cumulative (one browser for the whole test case, each step's code added as it is accepted), so it reproduces exactly the state the generated script will see.
+The Validation Browser is the contract: plain Playwright running nothing but accepted code, each statement compiled into a function of `page` and `expect` only. The whole script is replayed from a fresh context, back to back, so it reproduces both the state the generated script will see and its timing. Both browsers launch Chromium with the same arguments, so a page behaves the same in each.
+
+### Waiting for late content
+
+Some pages render their content well after loading, or after a click (an OutSystems app such as `https://appsmobileqms.nos.pt/WOO_MOB/Prelogin` takes about 9 seconds to show a screen). Extraction hides this: Playwright MCP's `browser_verify_*` tools check the page once without waiting, but the agent's own turns take seconds, so the content is usually there by the time it asserts. The agent cannot reliably tell that content was late; the script, running statement after statement, would see it late every time.
+
+The generated script must run in any Playwright project, so every wait it needs is in the script itself, and is measured rather than guessed:
+- **Actions need nothing.** In Playwright Test, actions (`click`, `fill`, `goto`, ...) wait for their element with no time limit but the test's, so they never carry a timeout.
+- **Assertions are timed in the replay.** The Validation Browser lets every assertion wait up to 30 seconds (Playwright MCP's own limit on `browser_wait_for`) and times it. One that passed after more than half of Playwright's 5-second default gets a `timeout` of twice what it took, rounded up to whole seconds; across rounds, an assertion keeps the largest. Content still missing after 30 seconds is a failure.
+- **The Generator writes it into the matcher**: the prompt shows the statement with a `[timeout: 18_000]` marker, the LLM adds the option, and the verbatim check accepts the line only if, without that option, it is the validated code and the value is the measured one. For example, `await expect(page.getByText('Produtos WOO')).toBeVisible({ timeout: 18_000 });`: one line per assertion, no wait statement before it, and no extractor round spent on late content.
+- **The test timeout is measured too.** The successful replay runs the whole script from a fresh context, back to back, so its duration is the script's run time. When twice that exceeds Playwright's default 30 seconds, the Generator pins `test.setTimeout(...)` (rounded up to 10 seconds) as the first line of the test.
+
+The agent may still use `browser_wait_for` to wait in its own browser, but its line never goes into the script.
 
 ### Retry and reset
 
-Before a retry both browsers are reset, so the agent sees the page as the script would, including a consent banner it had already dismissed. The Validation Browser is restarted and re-runs the accepted code; Playwright MCP gets a fresh session (a new in-process server and a newly launched browser, so an empty profile) and is sent to the URL the Validation Browser ended on. Only the URL carries over to Playwright MCP, so the agent is told to redo any setup the step depends on (a login, a cart) without reporting it.
+To re-extract a step, the agent's browser must be in exactly the state the script is in before that step, including a consent banner it had already dismissed. Playwright MCP gets a fresh session (a new in-process server and a newly launched browser, so an empty profile), and the application then runs the earlier steps' accepted code on that session's page itself, back to back, as the replay does. This works because the application creates the browser context it hands to Playwright MCP, and Playwright MCP adopts the context's pages as its tabs. The state the URL alone does not carry (a chosen product, a filled form, a login) is restored with it, so the agent continues from a live page as on its first attempt.
+
+If that restore fails at an earlier step's statement, that step's code is broken: it is re-extracted first (spending a retry), then the step that was being restored for.
 
 ### The Generator only assembles
 
-Every statement was proven against a live browser, and letting an LLM rewrite them would discard that proof. The LLM writes everything around them (comments, the import, the test title, step comments), and a deterministic check rejects the script if any validated line or the locale setting is missing, changed or out of order.
+Every statement was proven against a live browser, and letting an LLM rewrite them would discard that proof. The LLM writes everything around them (comments, the import, the test title, step comments) and adds only the measured timeouts, and a deterministic check rejects the script if any validated line or setting is missing, changed or out of order, or a timeout is missing, wrong or added where none was measured.
 
 ### Locale
 
@@ -229,8 +277,10 @@ The server's configuration is built in code (`mcpConfig()` in `src/extractor/mcp
 
 ## Known Limitations
 
-- **Waits are only collected when the agent asks for them.** Playwright MCP settles after every action, and that implicit wait is not in the emitted code. An explicit `browser_wait_for` is collectable, but pages that render content late can still pass in Playwright MCP and fail on replay if the agent does not use it (see [ROADMAP.md](./ROADMAP.md)).
-- **One retry, and only for rejections.** A step gets a single retry after a Validator rejection; an Extractor failure aborts the run immediately.
+- **Errors surface late.** A step's code is replayed only once every step is extracted (or when a restore runs into it), so an early step's error costs the extraction of the steps after it, and a fix that changes the flow can cost more rounds.
+- **A wrong assertion is slow to fail.** The replay lets every assertion wait up to 30 seconds, so an assertion on something that never appears takes that long to fail validation.
+- **Timeouts reflect the run that generated the script.** An assertion's timeout and the test timeout allow twice what was measured in one replay; a site that is slower than that on another day still times out. A pinned `test.setTimeout` also overrides a higher timeout set in the user's own Playwright config.
+- **Five retries per run, none for Extractor failures.** Every re-extraction spends one, whether a replay failed, the semantic validation still rejected a step after the agent's repairs, or a restore broke at an earlier step; an Extractor failure (running out of turns, reporting code MCP never ran) aborts the run immediately.
 - **Single-line statements.** Collected code is split line by line, so a statement spanning several lines would be rejected.
 - **One locale per run.** The Playwright MCP locale is fixed when its session starts, so a run covers one locale.
 - **Cost and latency.** Each step is its own agent conversation of several tool calls, plus a Validator call.
@@ -263,9 +313,10 @@ src/
 |   ├── agent.ts                    # StepAgent: per-step tool-calling loop,
 |   |                                 collects the reported statements
 |   ├── service.ts                  # Extractor: runs one step
-|   └── utils.ts                    # prompt context, step rebuilding, checks
+|   └── utils.ts                    # statement compiling, prompt context, checks
 ├── generator/
-|   └── service.ts                  # Generator: LLM assembly + verbatim check
+|   ├── service.ts                  # Generator: LLM assembly
+|   └── utils.ts                    # settings, prompt steps, verbatim check
 ├── llm/                            # LLM provider abstraction
 |   ├── protocol.ts                 # LLMProvider interface (completion and
 |   |                                 tool-calling conversation)
@@ -281,12 +332,16 @@ src/
 ├── structurer/
 |   └── service.ts                  # Structurer: markdown -> structured JSON
 ├── validator/
-|   ├── browser.ts                  # ValidationBrowser: replays accepted code
-|   └── service.ts                  # Validator: replay + semantic check
+|   ├── browser.ts                  # runStatements (ceiling, timing) and
+|   |                                 ValidationBrowser: replays accepted code
+|   ├── service.ts                  # Validator: semantic check + whole-script
+|   |                                 replay
+|   └── utils.ts                    # failure feedback, measured timeouts
 ├── config.ts                       # zod Settings + configureLogging()
 ├── exceptions.ts                   # PipelineError + per-stage subclasses
 ├── logger.ts                       # levelled, coloured stderr logger
-├── main.ts                         # CLI entrypoint and pipeline wiring
+├── main.ts                         # CLI entrypoint, pipeline wiring and the
+|                                     extract-then-validate loop
 └── prompt-loader.ts                # loadPrompt / renderPrompt
 test/                               # Vitest suite mirroring src/
 playwright.config.ts                # runs the generated specs in output/

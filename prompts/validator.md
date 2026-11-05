@@ -1,7 +1,7 @@
 Judge whether the Playwright code below actually accomplishes the test
 step it was produced for.
 
-The code has ALREADY been proven to execute: it ran against a live page
+The code has ALREADY been proven to execute: it just ran in a live browser
 without error, every locator resolved to exactly one element, and every
 assertion passed. Do not re-check any of that -- you cannot see the page,
 and it is settled.
@@ -48,7 +48,7 @@ OUTPUT SCHEMA
     the step on a retry.
 - When accepting, `statement_reasons` holds exactly one entry per numbered
     statement, in order: one compact sentence on why that line was accepted
-    for the step (for example, "Replayed cleanly and clicks the 'Login'
-    button the step asks for."). When rejecting, leave it empty.
+    for the step (for example, "Clicks the 'Login' button the step asks
+    for."). When rejecting, leave it empty.
 
 Return ONLY valid JSON, no code fences or commentary.

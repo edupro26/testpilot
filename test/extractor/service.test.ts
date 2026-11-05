@@ -20,20 +20,15 @@ const MODULE: Module = {
 };
 
 /** Run one step against a fake that clicks; return the agent's prompt. */
-async function runStep(
-    index: number,
-    history: string[],
-    resetTo?: string,
-): Promise<string> {
+async function runStep(index: number, history: string[]): Promise<string> {
     const mcp = new FakeMCP({ browser_click: new McpResult(false, emitted(CLICK)) });
     const llm = new MockProvider('', [
         toolTurn('browser_click', { element: 'link', target: 'e1' }),
         toolTurn('step_done', { statements: [{ code: CLICK }] }, 'c2'),
     ]);
 
-    const statements = await new Extractor(llm, mcp).runStep(MODULE, index, {
+    const { statements } = await new Extractor(llm, mcp).runStep(MODULE, index, {
         history,
-        ...(resetTo === undefined ? {} : { resetTo }),
     });
 
     expect(statements.map((s) => s.code)).toEqual([CLICK]);
@@ -41,9 +36,9 @@ async function runStep(
 }
 
 test('each step is briefed on its text and the browser state', async () => {
-    // The agent drives one step and must know what the browser already shows.
-    // The first step starts on a blank page; a later step continues from live
-    // state; a retry after a reset only keeps the URL, so setup must be redone.
+    // The agent drives one step and must know what the browser already shows:
+    // a blank page for the first step, the earlier steps' code for a later one
+    // (a re-extraction restores that state by running it).
     const first = await runStep(0, []);
     expect(first).toContain('Click Signup / Login');
     expect(first).toContain('blank page');
@@ -53,11 +48,4 @@ test('each step is briefed on its text and the browser state', async () => {
     expect(later).toContain('Verify the login section is visible');
     expect(later).toContain(CLICK);
     expect(later).toContain('Do not repeat');
-
-    const retry = await runStep(1, [CLICK], 'https://example.com/x');
-    expect(retry).toContain('fresh session');
-    expect(retry).toContain('https://example.com/x');
-    expect(retry).toContain(CLICK);
-    expect(retry).toContain('WITHOUT reporting');
-    expect(retry).not.toContain('Do not repeat');
 });

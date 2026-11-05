@@ -1,7 +1,7 @@
-/** Helpers for the Extractor: prompt context, collection checks, step rebuilding. */
+/** Helpers for the Extractor: compiling statements, prompt context, collection checks. */
 
 import { ExtractorError } from '../exceptions.ts';
-import type { ExecutionStep, Module, StepStatement } from '../model/test-case.ts';
+import type { Module } from '../model/test-case.ts';
 
 const AsyncFunction = async function () {
     /* only its constructor is used */
@@ -23,36 +23,15 @@ export function compileStatement(
 /**
  * Describe what the browser is already showing, for the agent's prompt.
  *
+ * A step that is re-extracted gets the same briefing: the pipeline restores
+ * its browser by running the earlier steps' code in it.
+ *
  * @param module - The module the step belongs to.
  * @param history - Statements already accepted for earlier steps.
- * @param resetTo - The URL a freshly reset MCP browser was sent to, when
- *   retrying. Earlier steps' state is then gone from it.
  * @returns A short natural-language briefing.
  */
-export function describeBrowserContext(
-    module: Module,
-    history: string[],
-    resetTo?: string,
-): string {
+export function describeBrowserContext(module: Module, history: string[]): string {
     const done = history.map((code) => `  ${code}`).join('\n');
-
-    if (resetTo !== undefined) {
-        const fresh =
-            `The browser was just reset for this retry: it is a fresh session ` +
-            `(no cookies, no login, nothing stored) open at ${resetTo}.`;
-        if (history.length === 0) {
-            return `${fresh} Nothing else has been done yet.`;
-        }
-        return (
-            `${fresh} Earlier steps ran this code in the previous session:\n` +
-            `${done}\n` +
-            `Only the URL survived the reset; their other effects (a login, a ` +
-            `cart, filled fields) are gone. First redo whatever of that setup ` +
-            `this step depends on, WITHOUT reporting those statements in ` +
-            `step_done. Then perform this step and report only its own ` +
-            `statements.`
-        );
-    }
 
     if (history.length === 0) {
         return (
@@ -66,29 +45,6 @@ export function describeBrowserContext(
         `Do not repeat that work -- continue from the current page state. ` +
         `This module's page is ${module.url}.`
     );
-}
-
-/**
- * Rebuild `module`'s steps with their collected statements attached.
- *
- * @param module - The module whose steps to rebuild.
- * @param statementsByStep - One list of statements per execution step.
- * @returns The rebuilt execution steps.
- */
-export function toExecutionSteps(
-    module: Module,
-    statementsByStep: StepStatement[][],
-): ExecutionStep[] {
-    if (statementsByStep.length !== module.execution_steps.length) {
-        throw new Error(
-            `Got statements for ${statementsByStep.length} step(s), ` +
-                `expected ${module.execution_steps.length}`,
-        );
-    }
-    return module.execution_steps.map((step, index) => ({
-        step: step.step,
-        statements: statementsByStep[index] ?? [],
-    }));
 }
 
 /**
