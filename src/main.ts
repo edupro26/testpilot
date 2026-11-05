@@ -8,22 +8,24 @@ import { Command, CommanderError } from 'commander';
 
 import { configureLogging, loadSettings, type Settings } from './config.ts';
 import { errorMessage, ValidatorError } from './exceptions.ts';
+import type { StepResult } from './extractor/agent.ts';
 import { PlaywrightMCP, playwrightServer } from './extractor/mcp/server.ts';
 import { Extractor } from './extractor/service.ts';
-import { toExecutionSteps } from './extractor/utils.ts';
 import { Generator } from './generator/service.ts';
 import { getLlmProvider } from './llm/factory.ts';
 import type { LLMProvider } from './llm/protocol.ts';
 import { logger } from './logger.ts';
-import type { Module, StepStatement, TestCase } from './model/test-case.ts';
+import {
+    type Module,
+    placeStatements,
+    type StepRef,
+    type StepStatement,
+    type TestCase,
+} from './model/test-case.ts';
 import { Structurer } from './structurer/service.ts';
-import { ValidationBrowser } from './validator/browser.ts';
+import { BrowserError, ValidationBrowser } from './validator/browser.ts';
 import { Validator } from './validator/service.ts';
-
-/** What the retry loop needs from the validation browser. */
-type ResettableBrowser = Pick<ValidationBrowser, 'reset' | 'run'> & {
-    readonly page: { url(): string };
-};
+import { failureAt, type StepFailure } from './validator/utils.ts';
 
 /** Ends the CLI with `exitCode`, after the failure has been logged. */
 export class CliExit extends Error {
@@ -62,7 +64,7 @@ export async function run(markdownPath: string): Promise<void> {
         const structurer = new Structurer(llm);
         const testCase = await structurer.run(await readFile(markdownPath, 'utf8'));
 
-        const result = await extractAndValidate(testCase, llm, settings);
+        const { result, runTimeMs } = await runStages(testCase, llm, settings);
         logger.info(`Extracted and validated ${result.modules.length} module(s)`);
 
         const outputDir = path.join(
@@ -76,7 +78,7 @@ export async function run(markdownPath: string): Promise<void> {
         logger.info(`Wrote validated test case to ${jsonPath}`);
 
         const generator = new Generator(llm, settings.browserLocale);
-        const script = await generator.run(result);
+        const script = await generator.run(result, runTimeMs);
 
         const scriptPath = path.join(outputDir, `${stem}.spec.ts`);
         await writeFile(scriptPath, script, 'utf8');
@@ -86,155 +88,214 @@ export async function run(markdownPath: string): Promise<void> {
     }
 }
 
-/**
- * Extract and validate every module, sharing one MCP and one validation browser.
- *
- * @param testCase - The structured test case.
- * @param llm - The LLM provider.
- * @param settings - Application settings, for the locale and MCP_MAX_TURNS.
- * @returns The test case with every step's statements filled in and proven.
- * @throws {ValidatorError} If a step still fails validation after one retry.
- */
-async function extractAndValidate(
+/** Re-extractions a run may spend, whatever triggered them. */
+export const MAX_RETRIES = 5;
+
+/** The stages `extractAndValidate` drives. */
+export interface Stages {
+    extractor: Pick<Extractor, 'runStep'>;
+    validator: Pick<Validator, 'validate' | 'judge'>;
+    mcp: Pick<PlaywrightMCP, 'reset' | 'run' | 'page'>;
+}
+
+/** Open the agent's and the replay browser, and extract and validate in them. */
+async function runStages(
     testCase: TestCase,
     llm: LLMProvider,
     settings: Settings,
-): Promise<TestCase> {
+): Promise<{ result: TestCase; runTimeMs: number }> {
     await using mcp = await PlaywrightMCP.connect(
         playwrightServer(settings.browserLocale),
     );
     await using browser = await ValidationBrowser.launch({
         locale: settings.browserLocale,
     });
-
-    const extractor = new Extractor(llm, mcp, settings.mcpMaxTurns);
-    const validator = new Validator(llm, browser);
-    const history: string[] = [];
-    const modules: Module[] = [];
-    for (const module of testCase.modules) {
-        modules.push(
-            await extractModule(module, extractor, validator, mcp, browser, history),
-        );
-    }
-    return { name: testCase.name, modules };
-}
-
-/**
- * Drive one module's steps, validating each before the next begins.
- *
- * @param module - The module to process.
- * @param extractor - Drives the live browser per step.
- * @param validator - Replays and judges each step.
- * @param mcp - The live MCP connection, reset before a retry.
- * @param browser - The validation browser, whose URL a reset MCP returns to.
- * @param history - Accepted statements so far, extended in place so later
- *   modules know what the browser is already showing.
- * @returns The module with every step's statements filled in.
- * @throws {ValidatorError} If a step still fails validation after one retry.
- */
-async function extractModule(
-    module: Module,
-    extractor: Extractor,
-    validator: Validator,
-    mcp: PlaywrightMCP,
-    browser: ValidationBrowser,
-    history: string[],
-): Promise<Module> {
-    const statementsByStep: StepStatement[][] = [];
-    for (let index = 0; index < module.execution_steps.length; index++) {
-        const statements = await extractStep(
-            module,
-            index,
-            extractor,
-            validator,
-            mcp,
-            browser,
-            history,
-        );
-        statementsByStep.push(statements);
-        history.push(...statements.map((statement) => statement.code));
-    }
-
-    return {
-        url: module.url,
-        description: module.description,
-        execution_steps: toExecutionSteps(module, statementsByStep),
-    };
-}
-
-/**
- * Extract and validate one step, retrying once with feedback.
- *
- * Both browsers are reset before the retry. The MCP browser only gets the
- * URL back, so the agent is told to redo the setup it needs, unreported.
- *
- * @throws {ValidatorError} If the step still fails after the retry.
- */
-export async function extractStep(
-    module: Module,
-    index: number,
-    extractor: Pick<Extractor, 'runStep'>,
-    validator: Pick<Validator, 'run'>,
-    mcp: Pick<PlaywrightMCP, 'reset' | 'callTool'>,
-    browser: ResettableBrowser,
-    history: string[],
-): Promise<StepStatement[]> {
-    const step = module.execution_steps[index];
-    if (step === undefined) {
-        throw new RangeError(`Module ${module.url} has no step ${index}`);
-    }
-    let statements = await extractor.runStep(module, index, { history });
-    let verdict = await validator.run(step.step, statements);
-    if (verdict.isValid) {
-        return verdict.statements;
-    }
-
-    logger.warning(
-        `Step ${JSON.stringify(step.step)} rejected, retrying with feedback`,
-    );
-    const url = await resetBrowsers(mcp, browser, module, history);
-    statements = await extractor.runStep(module, index, {
-        history,
-        feedback: verdict.feedback,
-        resetTo: url,
+    // Awaited here, or the browsers would close before the run ends.
+    return await extractAndValidate(testCase, {
+        extractor: new Extractor(llm, mcp, settings.mcpMaxTurns),
+        validator: new Validator(llm, browser),
+        mcp,
     });
-    verdict = await validator.run(step.step, statements);
-    if (!verdict.isValid) {
-        throw new ValidatorError(
-            `Step ${JSON.stringify(step.step)} failed validation after retry:\n` +
-                verdict.feedback,
-        );
-    }
-    return verdict.statements;
 }
 
 /**
- * Put both browsers back to a clean pre-step state before a retry.
+ * Extract every step, then replay the whole script until it passes.
  *
- * The validation browser re-runs the validated prefix; the MCP browser is
- * reconnected and sent to the validation browser's URL.
+ * A failure (or a step the judge still rejects) sends only that step back to
+ * the agent, with feedback, from its browser restored to the state before
+ * the step. Every re-extraction spends one of `MAX_RETRIES`.
  *
- * @returns The URL the MCP browser was sent to.
+ * @returns The validated test case, and how long its replay took.
+ * @throws {ValidatorError} If the retries run out.
  */
-async function resetBrowsers(
-    mcp: Pick<PlaywrightMCP, 'reset' | 'callTool'>,
-    browser: ResettableBrowser,
-    module: Module,
-    history: string[],
-): Promise<string> {
-    await browser.reset();
-    if (history.length > 0) {
-        await browser.run(history.map((code) => ({ code, reason: '' })));
+export function extractAndValidate(
+    testCase: TestCase,
+    stages: Stages,
+): Promise<{ result: TestCase; runTimeMs: number }> {
+    return new ExtractionRun(testCase, stages).execute();
+}
+
+/** One run of `extractAndValidate`: the test case so far, and the retries left. */
+class ExtractionRun {
+    private readonly stages: Stages;
+    private working: TestCase;
+    private retries = MAX_RETRIES;
+
+    constructor(testCase: TestCase, stages: Stages) {
+        this.stages = stages;
+        this.working = testCase;
     }
 
-    let url = browser.page.url();
-    if (url === '' || url === 'about:blank') {
-        url = module.url;
+    async execute(): Promise<{ result: TestCase; runTimeMs: number }> {
+        for (const ref of this.refs()) {
+            const { statements, rejection } = await this.extract(ref);
+            if (rejection === undefined) {
+                this.store(ref, statements);
+            } else {
+                await this.redo(ref, rejection);
+            }
+        }
+
+        for (;;) {
+            const validation = await this.stages.validator.validate(this.working);
+            this.working = validation.testCase;
+            if (validation.ok) {
+                return { result: this.working, runTimeMs: validation.runTimeMs };
+            }
+            const { ref, feedback } = validation.failure;
+            logger.warning(
+                `Validation failed at step ${JSON.stringify(this.text(ref))}`,
+            );
+            await this.redo(ref, feedback);
+        }
     }
-    await mcp.reset();
-    await mcp.callTool('browser_navigate', { url });
-    logger.info(`Both browsers reset to ${url} for the retry`);
-    return url;
+
+    /** Have the agent perform a step from where its browser is, judging each report. */
+    private extract(ref: StepRef, feedback?: string): Promise<StepResult> {
+        const step = this.text(ref);
+        const history = placeStatements(this.working, ref).map(
+            ({ statement }) => statement.code,
+        );
+        return this.stages.extractor.runStep(this.module(ref), ref.step, {
+            history,
+            ...(feedback === undefined ? {} : { feedback }),
+            check: async (statements) => {
+                const verdict = await this.stages.validator.judge(
+                    step,
+                    statements,
+                    await this.stages.mcp.page(),
+                );
+                return verdict.isValid
+                    ? { statements: verdict.statements }
+                    : { statements, rejection: verdict.feedback };
+            },
+        });
+    }
+
+    /**
+     * Re-extract a step with feedback until the judge accepts it; a restore
+     * that breaks at an earlier step re-extracts that step first.
+     *
+     * @throws {ValidatorError} If the retries run out.
+     */
+    private async redo(ref: StepRef, feedback: string): Promise<void> {
+        for (;;) {
+            if (this.retries === 0) {
+                throw new ValidatorError(
+                    `Step ${JSON.stringify(this.text(ref))} still failing, and ` +
+                        `the run's ${MAX_RETRIES} retries are spent. Last ` +
+                        `failure:\n${feedback}`,
+                );
+            }
+            const broken = await this.restore(ref);
+            if (broken !== undefined) {
+                logger.warning(
+                    `Restoring the browser failed at step ${JSON.stringify(this.text(broken.ref))}`,
+                );
+                await this.redo(broken.ref, broken.feedback);
+                continue;
+            }
+            this.retries--;
+            logger.info(
+                `Re-extracting step ${JSON.stringify(this.text(ref))} ` +
+                    `(retry ${MAX_RETRIES - this.retries}/${MAX_RETRIES})`,
+            );
+            const { statements, rejection } = await this.extract(ref, feedback);
+            if (rejection === undefined) {
+                this.store(ref, statements);
+                return;
+            }
+            feedback = rejection;
+        }
+    }
+
+    /**
+     * Bring the agent's browser to the state before `ref`, by running the
+     * earlier steps' statements in a fresh session.
+     *
+     * @returns The earlier step whose code failed, if one did.
+     */
+    private async restore(ref: StepRef): Promise<StepFailure | undefined> {
+        await this.stages.mcp.reset();
+        const prefix = placeStatements(this.working, ref);
+        if (prefix.length === 0) {
+            return undefined;
+        }
+        try {
+            await this.stages.mcp.run(prefix.map(({ statement }) => statement));
+        } catch (error) {
+            if (!(error instanceof BrowserError)) {
+                throw error;
+            }
+            return failureAt(
+                prefix,
+                error,
+                'This statement failed when the pipeline re-ran the accepted ' +
+                    'code to restore the browser for a later step:',
+            );
+        }
+        return undefined;
+    }
+
+    /** Every step, in run order. */
+    private refs(): StepRef[] {
+        return this.working.modules.flatMap((module, moduleIndex) =>
+            module.execution_steps.map((_, step) => ({ module: moduleIndex, step })),
+        );
+    }
+
+    private module(ref: StepRef): Module {
+        const module = this.working.modules[ref.module];
+        if (module === undefined) {
+            throw new RangeError(`The test case has no module ${ref.module}`);
+        }
+        return module;
+    }
+
+    private text(ref: StepRef): string {
+        const step = this.module(ref).execution_steps[ref.step];
+        if (step === undefined) {
+            throw new RangeError(`Module ${ref.module} has no step ${ref.step}`);
+        }
+        return step.step;
+    }
+
+    /** Replace a step's statements. */
+    private store(ref: StepRef, statements: StepStatement[]): void {
+        this.working = {
+            ...this.working,
+            modules: this.working.modules.map((module, moduleIndex) =>
+                moduleIndex !== ref.module
+                    ? module
+                    : {
+                          ...module,
+                          execution_steps: module.execution_steps.map((step, index) =>
+                              index === ref.step ? { ...step, statements } : step,
+                          ),
+                      },
+            ),
+        };
+    }
 }
 
 /**

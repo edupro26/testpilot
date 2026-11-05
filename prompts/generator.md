@@ -9,9 +9,15 @@ TEST CASE NAME
 LOCALE SETTING (copy into the file exactly as given)
 {{locale_setting}}
 
+TIMEOUT SETTING (copy into the test body exactly as given, unless it says
+"(none)")
+{{timeout_setting}}
+
 STEPS AND THEIR VALIDATED STATEMENTS
 Each block is one step of the test case: the step's text, then the
-TypeScript statements that perform it, in order.
+TypeScript statements that perform it, in order. A statement followed by
+`[timeout: <ms>]` is an assertion whose content takes longer than usual to
+appear: the marker is not part of its code.
 
 {{steps}}
 
@@ -30,16 +36,25 @@ WHAT THE FILE MUST CONTAIN, IN THIS ORDER
     - Title: a short, plain-English description of the test, at most 60
         characters, starting with a capital letter and with no trailing
         period.
-    - The body: for every step, in the given order, a comment `// <step text>`
-        followed by that step's statements, one per line. Leave one blank
-        line between steps. For a step with no statements, write the step
-        comment followed by `// (no browser interaction required)`.
+    - The body: if a timeout setting is given, first that line on its own,
+        then a blank line. Then, for every step, in the given order, a
+        comment `// <step text>` followed by that step's statements, one per
+        line. Leave one blank line between steps. For a step with no
+        statements, write the step comment followed by
+        `// (no browser interaction required)`.
 
 RULES FOR THE STATEMENTS
 - Copy every statement character for character. Do not edit, reformat,
     rename, reorder, merge, split or wrap them, and do not add or remove any.
     They are the validated part of the test; the file is rejected if one is
     missing or changed.
+- The one change you make: for a statement marked `[timeout: <ms>]`, drop
+    the marker and give its matcher (the call after `expect(...)`, such as
+    `.toBeVisible()`) the option `timeout: <ms>`, with the value as given.
+    If the matcher has no options object, add `{ timeout: <ms> }` as its
+    last argument; if it already has one, add `timeout: <ms>` as that
+    object's last property. Leave the rest of the statement untouched, and
+    give no other statement a timeout.
 - Do not add any other code: no waits, retries, try/catch, console logs,
     helper functions, variables, assertions or setup.
 
@@ -55,7 +70,8 @@ STYLE
 
 EXAMPLE
 For a test case "Login with valid credentials", the locale setting
-`test.use({ locale: 'en-US' });` and the steps:
+`test.use({ locale: 'en-US' });`, the timeout setting
+`test.setTimeout(60_000);` and the steps:
 
 STEP: Open the login page
 await page.goto('https://example.com/login');
@@ -65,6 +81,9 @@ STEP: Check the page is shown
 
 STEP: Verify the welcome message is visible
 await expect(page.getByText('Welcome back')).toBeVisible();
+
+STEP: Verify the dashboard has loaded
+await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();  [timeout: 20_000]
 
 the file is:
 
@@ -80,6 +99,8 @@ test.use({ locale: 'en-US' });
 
 /** Open the login page and verify the welcome message is visible. */
 test('Login with valid credentials', async ({ page }) => {
+  test.setTimeout(60_000);
+
   // Open the login page
   await page.goto('https://example.com/login');
 
@@ -88,6 +109,9 @@ test('Login with valid credentials', async ({ page }) => {
 
   // Verify the welcome message is visible
   await expect(page.getByText('Welcome back')).toBeVisible();
+
+  // Verify the dashboard has loaded
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible({ timeout: 20_000 });
 });
 
 OUTPUT

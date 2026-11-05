@@ -43,8 +43,9 @@ export const ALLOWED_TOOLS: readonly string[] = [
 // The subset whose emitted code may enter the script: the test's actions and
 // assertions, each a self-contained line. The others explore (snapshot, find,
 // evaluate, screenshots, logs), change the environment rather than the page
-// (resize, emulate_media), or emit code that depends on a variable from an
-// earlier line (file_upload, handle_dialog, tabs, drop).
+// (resize, emulate_media), emit code that depends on a variable from an
+// earlier line (file_upload, handle_dialog, tabs, drop), or wait in the
+// agent's browser only (wait_for: the script's timing is measured instead).
 export const COLLECTABLE_TOOLS: ReadonlySet<string> = new Set([
     'browser_navigate',
     'browser_navigate_back',
@@ -55,7 +56,6 @@ export const COLLECTABLE_TOOLS: ReadonlySet<string> = new Set([
     'browser_press_key',
     'browser_fill_form',
     'browser_select_option',
-    'browser_wait_for',
     'browser_verify_element_visible',
     'browser_verify_text_visible',
     'browser_verify_list_visible',

@@ -41,6 +41,17 @@ HOW TO WORK
 - If an action fails because a locator matched several elements, the error
     names a more specific locator for each candidate -- use one of them.
 
+TIMING
+The pipeline measures how long the script has to wait for each assertion
+and sets that wait itself, so never add waits for the script's sake.
+
+- If content you need has not rendered yet in your browser (`browser_find`
+    finds nothing, the snapshot is nearly empty, or it shows a loader), you
+    may call `browser_wait_for` with `text` set to text of that content, to
+    wait in your own browser.
+- Never report a `browser_wait_for` line in `step_done`: it is not part of
+    the script.
+
 LOCATORS THAT SURVIVE OUTSIDE THIS SESSION
 The code you report is replayed in a plain Playwright script that has no
 accessibility tree -- only the DOM. You can see more here than that script
@@ -49,8 +60,9 @@ will.
 - `target` accepts either a snapshot `ref` or a CSS selector. A `ref`
     produces a role/text locator; a CSS selector produces
     `page.locator('<selector>')`.
-- If feedback says a statement resolved to nothing in a clean browser, the
-    element's accessible name probably differs there -- many cookie
+- If feedback says a statement resolved to nothing in a clean browser, and
+    the element on your page has a different name than the statement
+    uses, the element's accessible name probably differs there -- many cookie
     banners are translated by the server, so a button reading "Allow all"
     for you may read something else at run time. Retry that action with a
     **CSS selector** as `target`, using a stable `id` or `data-*`
@@ -61,7 +73,11 @@ will.
     an id or attribute that is clearly meaningful.
 
 REPORTING THE STEP
-Call `step_done` when the step is complete.
+Call `step_done` when the step is complete. Your statements are then
+checked against what the step asks. If they are rejected, `step_done`
+returns why instead of ending the step: your browser is still where you
+left it, so fix the step and call `step_done` again with its complete list
+of statements.
 
 - You NEVER write Playwright code. Every successful tool call reports the
     exact code it ran under "### Ran Playwright code". Copy those lines

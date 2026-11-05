@@ -3,10 +3,11 @@
 import { describe, expect, test } from 'vitest';
 
 import { ExtractorError } from '../../src/exceptions.ts';
-import { StepAgent } from '../../src/extractor/agent.ts';
+import { StepAgent, type StepResult } from '../../src/extractor/agent.ts';
 import { McpResult } from '../../src/extractor/mcp/server.ts';
 import type { ToolUseResponse } from '../../src/llm/protocol.ts';
 import { MockProvider, toolTurn } from '../../src/llm/provider/mock.ts';
+import { statement, type StepStatement } from '../../src/model/test-case.ts';
 import { emitted, FakeMCP } from './fakes.ts';
 
 const CLICK = "await page.getByRole('link', { name: 'Signup / Login' }).click();";
@@ -63,7 +64,7 @@ test('drives the browser, recovers and collects what MCP ran', async () => {
         done(CONSENT, CLICK),
     ]);
 
-    const statements = await new StepAgent(llm, mcp).run('Click Signup / Login', {
+    const { statements } = await new StepAgent(llm, mcp).run('Click Signup / Login', {
         context: 'fresh',
         feedback: 'clicked the wrong link',
     });
@@ -81,6 +82,75 @@ test('drives the browser, recovers and collects what MCP ran', async () => {
     expect(tools).toContain('step_done');
     expect(tools).toContain('browser_verify_element_visible');
     expect(tools).not.toContain('browser_run_code_unsafe');
+});
+
+test('a rejected report goes back to the agent, until its repairs run out', async () => {
+    // The agent fixes the step on its still-live page, in the same
+    // conversation. Past its repairs, the step is handed back rejected, to be
+    // re-extracted from a restored browser instead.
+    const llm = new MockProvider('', [
+        toolTurn('browser_click', {}),
+        done(CLICK),
+        done(CLICK),
+        done(CLICK),
+    ]);
+    const mcp = new FakeMCP({ browser_click: new McpResult(false, emitted(CLICK)) });
+    let checks = 0;
+    const check = async (statements: StepStatement[]): Promise<StepResult> => {
+        checks++;
+        return { statements, rejection: 'clicks the wrong link' };
+    };
+
+    const result = await new StepAgent(llm, mcp).run('Click Signup / Login', {
+        context: 'x',
+        check,
+    });
+
+    expect(result).toEqual({
+        statements: [statement(CLICK)],
+        rejection: 'clicks the wrong link',
+    });
+    expect(checks).toBe(3);
+    const repair = llm.conversations[0]!.sent[2]![0]!;
+    expect(repair.isError).toBe(true);
+    expect(repair.content).toContain('clicks the wrong link');
+});
+
+test('a reported wait is left out of the script', async () => {
+    // The pipeline measures the script's timing itself, so a wait the agent
+    // reports is dropped, not fatal. A report of nothing but waits goes back
+    // before the judge sees it: it would pass as needing no interaction.
+    const verify = "await expect(page.getByText('Produtos WOO')).toBeVisible();";
+    const wait =
+        'await page.getByText("Produtos WOO").first().waitFor({ state: \'visible\' });';
+    const mcp = new SequencedMCP(
+        new McpResult(false, emitted(wait)),
+        new McpResult(false, emitted(verify)),
+    );
+    const llm = new MockProvider('', [
+        toolTurn('browser_wait_for', { text: 'Produtos WOO', time: 30 }),
+        done(wait),
+        toolTurn('browser_verify_text_visible', { text: 'Produtos WOO' }),
+        done(wait, verify),
+    ]);
+    const checked: string[][] = [];
+    const check = async (statements: StepStatement[]): Promise<StepResult> => {
+        checked.push(statements.map((s) => s.code));
+        return { statements: statements.map((s) => ({ ...s, reason: 'shows it' })) };
+    };
+
+    const result = await new StepAgent(llm, mcp).run('Verify Produtos WOO', {
+        context: 'x',
+        check,
+    });
+
+    expect(result).toEqual({
+        statements: [{ ...statement(verify), reason: 'shows it' }],
+    });
+    expect(checked).toEqual([[verify]]);
+    const repair = llm.conversations[0]!.sent[2]![0]!;
+    expect(repair.isError).toBe(true);
+    expect(repair.content).toContain('browser_verify_');
 });
 
 describe('rejects a statement not emitted verbatim by a collectable tool', () => {
@@ -138,7 +208,7 @@ test('the loop ends only through step_done', async () => {
     const idle = new MockProvider('', [done()]);
     expect(
         await new StepAgent(idle, new FakeMCP()).run('Look', { context: 'x' }),
-    ).toEqual([]);
+    ).toEqual({ statements: [] });
 
     const looping = new MockProvider(
         '',

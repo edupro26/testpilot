@@ -1,6 +1,7 @@
 /** Tests for src/extractor/mcp: collecting, the allowlists and the client. */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { BrowserContext } from '@playwright/test';
 import { describe, expect, test } from 'vitest';
 
 import { McpError } from '../../../src/exceptions.ts';
@@ -14,14 +15,14 @@ import {
     playwrightServer,
     type ServerFactory,
 } from '../../../src/extractor/mcp/server.ts';
+import { statement } from '../../../src/model/test-case.ts';
 import { emitted } from '../fakes.ts';
 
 const CLICK = "await page.getByRole('button', { name: 'Consent' }).click();";
 
 /** A fake MCP server offering `tools`, each reporting `CLICK` as its code. */
-function fakeServer(tools: readonly string[], created: string[] = []): ServerFactory {
+function fakeServer(tools: readonly string[]): ServerFactory {
     return async () => {
-        created.push('server');
         const server = new McpServer({ name: 'fake', version: '0' });
         for (const name of tools) {
             server.registerTool(name, { description: `${name} description` }, () => ({
@@ -63,6 +64,8 @@ test('the tool allowlists', () => {
         'browser_find',
         'browser_resize',
         'browser_file_upload',
+        // Waits in the agent's own browser; the script's timing is measured.
+        'browser_wait_for',
     ]) {
         expect(ALLOWED_TOOLS).toContain(name);
         expect(COLLECTABLE_TOOLS.has(name)).toBe(false);
@@ -77,7 +80,6 @@ test('the tool allowlists', () => {
         'browser_press_key',
         'browser_fill_form',
         'browser_select_option',
-        'browser_wait_for',
         'browser_verify_element_visible',
         'browser_verify_text_visible',
         'browser_verify_value',
@@ -117,22 +119,76 @@ describe('PlaywrightMCP', () => {
         );
     });
 
-    test('reset starts a fresh server', async () => {
-        const created: string[] = [];
-        await using mcp = await PlaywrightMCP.connect(
-            fakeServer(ALLOWED_TOOLS, created),
-        );
+    test("runs statements on the session's newest page, a new session's after a reset", async () => {
+        // The pipeline restores the agent's browser by running accepted code on
+        // the page the agent works on: the newest (a link may open a tab), and
+        // after a reset that of a fresh server.
+        const contexts: FakeContext[] = [];
+        await using mcp = await PlaywrightMCP.connect(fakeServerWithContext(contexts));
+        const goto = statement("await page.goto('https://example.com');");
 
+        expect(await mcp.run([goto])).toHaveLength(1);
+        const tab = await contexts[0]!.newPage();
+        expect(await mcp.page()).toBe(tab);
         await mcp.reset();
+        await mcp.run([goto]);
 
-        expect(created).toHaveLength(2);
         expect((await mcp.callTool('browser_click', {})).code).toEqual([CLICK]);
+        expect(contexts.map((context) => context.visited)).toEqual([
+            ['https://example.com'],
+            ['https://example.com'],
+        ]);
+
+        await using plain = await PlaywrightMCP.connect(fakeServer(ALLOWED_TOOLS));
+        await expect(plain.run([goto])).rejects.toThrow(McpError);
     });
 
-    test('the real Playwright MCP offers every allowlisted tool', async () => {
-        // Offline: the session launches its browser but never visits a site.
+    test('the real Playwright MCP offers every allowlisted tool, on the pipeline page', async () => {
+        // Offline, on a data: page. What the pipeline runs on the page must be
+        // what the agent then sees: Playwright MCP adopts the page as its tab.
         await using mcp = await PlaywrightMCP.connect(playwrightServer('en-US'));
+        const page = 'data:text/html,<h1>Restored by the pipeline</h1>';
 
         expect(mcp.listTools().map((tool) => tool.name)).toEqual(ALLOWED_TOOLS);
+
+        await mcp.run([statement(`await page.goto(${JSON.stringify(page)});`)]);
+        const snapshot = await mcp.callTool('browser_snapshot', {});
+
+        expect(snapshot.isError).toBe(false);
+        expect(snapshot.content).toContain('Restored by the pipeline');
     });
 });
+
+/** A stand-in browser context, recording where its pages navigated. */
+interface FakeContext {
+    readonly visited: string[];
+    pages(): object[];
+    newPage(): Promise<object>;
+}
+
+/** A fake MCP server offering every tool, each with a fresh fake context. */
+function fakeServerWithContext(contexts: FakeContext[]): ServerFactory {
+    const plain = fakeServer(ALLOWED_TOOLS);
+    return async () => {
+        const visited: string[] = [];
+        const pages: object[] = [];
+        const context: FakeContext = {
+            visited,
+            pages: () => pages,
+            newPage: async () => {
+                const page = {
+                    setDefaultTimeout: (): void => undefined,
+                    goto: async (url: string): Promise<void> => {
+                        visited.push(url);
+                    },
+                };
+                pages.push(page);
+                return page;
+            },
+        };
+        contexts.push(context);
+        return Object.assign(await plain(), {
+            context: context as unknown as BrowserContext,
+        });
+    };
+}
