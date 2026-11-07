@@ -1,11 +1,14 @@
 /** LLM provider selection. */
 
-import type { Settings } from '../config.ts';
-import { ConfigurationError } from '../exceptions.ts';
+import type { LLMProviderName, Settings } from '../config.ts';
 import type { LLMProvider } from './protocol.ts';
 import { AzureOpenAIProvider } from './provider/azure-openai.ts';
-import { MockProvider } from './provider/mock.ts';
 import { RetryingLLMProvider } from './retry.ts';
+
+/** How to build each provider a run can select. */
+const PROVIDERS: Record<LLMProviderName, new (settings: Settings) => LLMProvider> = {
+    azure_openai: AzureOpenAIProvider,
+};
 
 /**
  * Return the configured LLMProvider implementation.
@@ -15,22 +18,10 @@ import { RetryingLLMProvider } from './retry.ts';
  *
  * @param settings - Application settings, including llmProvider.
  * @returns The selected provider, wrapped with retry protection.
- * @throws {ConfigurationError} If llmProvider names an unsupported provider,
- *   or the selected provider is missing required settings.
+ * @throws {ConfigurationError} If the selected provider is missing required
+ *   settings.
  */
 export function getLlmProvider(settings: Settings): RetryingLLMProvider {
-    let provider: LLMProvider;
-    switch (settings.llmProvider) {
-        case 'mock':
-            provider = new MockProvider();
-            break;
-        case 'azure_openai':
-            provider = new AzureOpenAIProvider(settings);
-            break;
-        default:
-            throw new ConfigurationError(
-                `${String(settings.llmProvider)} is not supported`,
-            );
-    }
-    return new RetryingLLMProvider(provider);
+    const Provider = PROVIDERS[settings.llmProvider];
+    return new RetryingLLMProvider(new Provider(settings));
 }

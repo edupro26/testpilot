@@ -11,6 +11,7 @@ export default defineConfig(
             'node_modules/',
             '.venv/',
             'output/',
+            '.testpilot/',
             '.playwright-mcp/',
             'playwright-report/',
             'test-results/',

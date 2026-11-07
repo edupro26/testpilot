@@ -9,11 +9,11 @@
 
 import { z } from 'zod';
 
-import { ExtractorError } from '../exceptions.ts';
 import type { LLMProvider, ToolDefinition, ToolResult } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
 import { statement, type StepStatement } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
+import { ExtractorError } from '../runtime/exceptions.ts';
 import { COLLECTABLE_TOOLS } from './mcp/constants.ts';
 import type { McpConnection } from './mcp/server.ts';
 import { requireStatement } from './utils.ts';

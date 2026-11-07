@@ -2,7 +2,6 @@
 
 import { expect, test } from 'vitest';
 
-import { ValidatorError } from '../../src/exceptions.ts';
 import { MockProvider } from '../../src/llm/provider/mock.ts';
 import {
     type ExecutionStep,
@@ -10,6 +9,7 @@ import {
     type StepStatement,
     type TestCase,
 } from '../../src/model/test-case.ts';
+import { ValidatorError } from '../../src/runtime/exceptions.ts';
 import { BrowserError, type ReplayBrowser } from '../../src/validator/browser.ts';
 import { Validator } from '../../src/validator/service.ts';
 

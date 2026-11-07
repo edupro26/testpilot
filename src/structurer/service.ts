@@ -2,11 +2,11 @@
 
 import { z } from 'zod';
 
-import { errorMessage, StructurerError } from '../exceptions.ts';
 import type { LLMProvider } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
 import { type TestCase, TestCaseSchema } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
+import { errorMessage, StructurerError } from '../runtime/exceptions.ts';
 
 const SYSTEM_PROMPT = 'You are an expert QA automation engineer.';
 

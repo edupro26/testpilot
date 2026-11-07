@@ -40,19 +40,24 @@ Generated tests run with the project's own Playwright and `playwright.config.*`,
 - the project has `@playwright/test` and a `playwright.config.*`, warning when its Playwright is older than testpilot's (the code Playwright MCP emits follows testpilot's version)
 - the LLM settings are present, API key included
 
-**`testpilot init`** runs `doctor` first and stops on a failure. It then reads the project's `testDir` and creates:
+**`testpilot init`** runs `doctor` first and stops on a failed check, except the LLM settings check (the LLM is configured afterwards). It then reads the project's `testDir` and writes only what testpilot cannot know by itself:
 
 ```
 .testpilot/
-    logs/                       # one log per generate run
-    tests/                      # the validated JSON test case of each run
     .gitignore                  # ignores logs/, tests/ and .playwright-mcp/
-    config.json                 # testpilot's settings, API keys excluded
+    config.json                 # { "scriptsDir": "<testDir>/testpilot" }
 ```
 
-`init` does not create `.playwright-mcp/`: Playwright MCP creates it inside `.testpilot/` the first time it writes output.
+Every other setting keeps its default until it is set, and the Azure block comes from `config set-azure-openai` (task B). The rest of `.testpilot/` is created by `generate` when it first writes there:
 
-Re-running `init` is safe: it never overwrites an existing config. Installing the skills (task C) is added to it later.
+```
+.testpilot/
+    .playwright-mcp/            # Playwright MCP output
+    logs/                       # one log per generate run
+    tests/                      # the validated JSON test case of each run
+```
+
+Re-running `init` is safe: it never overwrites an existing file, and only adds `scriptsDir` to a `config.json` that lacks it. That is also how `init --skills` (task C) adds or updates the skills in a project already set up.
 
 #### Settings
 
@@ -74,7 +79,7 @@ Every setting except API keys lives in `.testpilot/config.json`. Test execution 
 }
 ```
 
-`scriptsDir` defaults to `<testDir>/testpilot/`, so Playwright picks the generated specs up. `llmProvider` is `azure_openai` or `mock`.
+`scriptsDir` is set by `init` to `<testDir>/testpilot/`, so Playwright picks the generated specs up. `llmProvider` accepts only `azure_openai` (the default) for now.
 
 Any setting can be overridden by an environment variable carrying the `TESTPILOT_` prefix, so variables the webapp keeps for itself (e.g. its own `AZURE_OPENAI_API_KEY`) are never picked up by accident. The API key is only ever read from the environment.
 

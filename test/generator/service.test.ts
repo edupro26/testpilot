@@ -2,7 +2,6 @@
 
 import { describe, expect, test } from 'vitest';
 
-import { GeneratorError } from '../../src/exceptions.ts';
 import { Generator } from '../../src/generator/service.ts';
 import { MockProvider } from '../../src/llm/provider/mock.ts';
 import {
@@ -10,6 +9,7 @@ import {
     type StepStatement,
     type TestCase,
 } from '../../src/model/test-case.ts';
+import { GeneratorError } from '../../src/runtime/exceptions.ts';
 
 const CONSENT = "await page.getByRole('button', { name: 'Consent' }).click();";
 const CLICK = "await page.getByRole('link', { name: 'Signup / Login' }).click();";

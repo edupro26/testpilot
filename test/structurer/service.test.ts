@@ -2,8 +2,8 @@
 
 import { expect, test } from 'vitest';
 
-import { StructurerError } from '../../src/exceptions.ts';
 import { MockProvider } from '../../src/llm/provider/mock.ts';
+import { StructurerError } from '../../src/runtime/exceptions.ts';
 import { Structurer } from '../../src/structurer/service.ts';
 
 const VALID_RESPONSE = JSON.stringify({

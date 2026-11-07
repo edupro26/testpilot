@@ -2,12 +2,12 @@
 
 import { describe, expect, test } from 'vitest';
 
-import { ExtractorError } from '../../src/exceptions.ts';
 import { StepAgent, type StepResult } from '../../src/extractor/agent.ts';
 import { McpResult } from '../../src/extractor/mcp/server.ts';
 import type { ToolUseResponse } from '../../src/llm/protocol.ts';
 import { MockProvider, toolTurn } from '../../src/llm/provider/mock.ts';
 import { statement, type StepStatement } from '../../src/model/test-case.ts';
+import { ExtractorError } from '../../src/runtime/exceptions.ts';
 import { emitted, FakeMCP } from './fakes.ts';
 
 const CLICK = "await page.getByRole('link', { name: 'Signup / Login' }).click();";

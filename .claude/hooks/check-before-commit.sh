@@ -3,6 +3,14 @@
 # format and the test suite pass, as AGENTS.md requires.
 set -uo pipefail
 
+# The settings' `if` filter is not applied on every version, so check here too:
+# any other command passes straight through.
+command=$(jq -r '.tool_input.command // empty')
+case "$command" in
+  *"git commit"*) ;;
+  *) exit 0 ;;
+esac
+
 cd "${CLAUDE_PROJECT_DIR:-$PWD}" || exit 0
 
 if ! out=$(npm run --silent check 2>&1); then

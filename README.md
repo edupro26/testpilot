@@ -10,39 +10,74 @@ An LLM agent performs each step of the test case in a real browser through [Play
 ## Prerequisites
 
 - Node.js 24 or newer (runs the TypeScript sources directly)
-- An Azure OpenAI deployment (or `LLM_PROVIDER=mock` for offline runs)
+- An Azure OpenAI deployment
 
 ## Setup
 
+**Once per machine**, install testpilot from its repository:
+
 ```bash
-npm ci                                # install dependencies
-npx playwright install chromium       # browser for Playwright MCP, validation and the generated tests
-npm link                              # put the `testpilot` command on your PATH
-cp .env.example .env                  # then fill in your settings
+git clone https://github.com/edupro26/testpilot.git
+cd testpilot
+npm ci && npm link
 ```
+
+`npm ci` installs the dependencies and the Chromium build testpilot drives while generating; `npm link` puts the `testpilot` command on your PATH. To update later: `git pull && npm ci`.
+
+**Once per project**, inside the webapp project you want tests for:
+
+```bash
+npm init playwright@latest            # only if the project has no Playwright yet
+testpilot init                        # check the setup and create .testpilot/
+```
+
+Then add your Azure OpenAI settings to `.testpilot/config.json`, set `TESTPILOT_AZURE_OPENAI_API_KEY` (in the shell, `.env` or `.env.local`), and run `testpilot doctor` to confirm everything is in place. `doctor` prints the command that fixes anything missing.
+
+The generated scripts run with the project's own Playwright and `playwright.config.*`; testpilot's own Playwright is only used while generating.
 
 ### Configuration
 
-Settings are read from the environment or `.env`:
+Settings live in the project's `.testpilot/config.json`; every key is optional and falls back to its default:
 
-| Variable | Description |
-|---|---|
-| `LLM_PROVIDER` | `azure_openai` or `mock` (default `mock`) |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint |
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
-| `AZURE_DEPLOYMENT_NAME` | Azure deployment name |
-| `AZURE_MODEL_NAME` | Model name behind the deployment |
-| `OPENAI_API_VERSION` | Azure OpenAI API version |
-| `BROWSER_LOCALE` | Locale of all three browsers: Playwright MCP's, the validation browser and the generated script's (default `en-US`) |
-| `MCP_MAX_TURNS` | Maximum agent turns per step (default `25`) |
-| `LOG_LEVEL` | Logging level (default `INFO`) |
+```json
+{
+    "llmProvider": "azure_openai",
+    "azureOpenAI": {
+        "endpoint": "https://<resource>.openai.azure.com/",
+        "modelName": "gpt-5.5",
+        "deploymentName": "gpt-5.5",
+        "apiVersion": "2025-04-01-preview"
+    },
+    "scriptsDir": "tests/testpilot",
+    "maxTurns": 25,
+    "locale": "en-US",
+    "logLevel": "info"
+}
+```
+
+Each setting can be overridden by its `TESTPILOT_` environment variable, from the shell, `.env` or `.env.local`. Only `TESTPILOT_` variables are read, so the project's own variables are never picked up. The API key is only read from the environment, never from `config.json`.
+
+| `config.json` | Environment variable | Description |
+|---|---|---|
+| `llmProvider` | `TESTPILOT_LLM_PROVIDER` | `azure_openai`, the only provider for now (default) |
+| `azureOpenAI.endpoint` | `TESTPILOT_AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint |
+| `azureOpenAI.modelName` | `TESTPILOT_AZURE_MODEL_NAME` | Model name behind the deployment |
+| `azureOpenAI.deploymentName` | `TESTPILOT_AZURE_DEPLOYMENT_NAME` | Azure deployment name |
+| `azureOpenAI.apiVersion` | `TESTPILOT_OPENAI_API_VERSION` | Azure OpenAI API version |
+| (none) | `TESTPILOT_AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
+| `scriptsDir` | `TESTPILOT_SCRIPTS_DIR` | Folder the generated scripts go to (default `tests/testpilot`) |
+| `maxTurns` | `TESTPILOT_MAX_TURNS` | Maximum agent turns per step (default `25`) |
+| `locale` | `TESTPILOT_LOCALE` | Locale of all three browsers: Playwright MCP's, the validation browser and the generated script's (default `en-US`) |
+| `logLevel` | `TESTPILOT_LOG_LEVEL` | Logging level (default `info`) |
+
+Precedence, weakest first: the defaults, `config.json`, `.env`, `.env.local`, the shell environment.
 
 ## Usage
 
 1. Run the pipeline on a test case. Playwright MCP runs inside the application, so there is no server to start first:
 
     ```bash
-    testpilot examples/automation/test_login_incorrect_credentials.md
+    testpilot generate examples/automation/test_login_incorrect_credentials.md
     ```
 
     It writes the validated test case and the generated script to `output/<folder>/`, named after the input file:

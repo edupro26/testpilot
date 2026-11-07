@@ -3,8 +3,8 @@
 import { AzureOpenAI } from 'openai';
 
 import type { Settings } from '../../config.ts';
-import { ConfigurationError } from '../../exceptions.ts';
 import { logger } from '../../logger.ts';
+import { ConfigurationError } from '../../runtime/exceptions.ts';
 import type {
     CompletionRequest,
     ConversationRequest,
@@ -25,17 +25,17 @@ export class AzureOpenAIProvider implements LLMProvider {
      */
     constructor(settings: Settings) {
         const {
-            AZURE_OPENAI_ENDPOINT: endpoint,
-            AZURE_OPENAI_API_KEY: apiKey,
-            AZURE_DEPLOYMENT_NAME: deployment,
-            AZURE_MODEL_NAME: model,
-            OPENAI_API_VERSION: apiVersion,
+            TESTPILOT_AZURE_OPENAI_ENDPOINT: endpoint,
+            TESTPILOT_AZURE_OPENAI_API_KEY: apiKey,
+            TESTPILOT_AZURE_DEPLOYMENT_NAME: deployment,
+            TESTPILOT_AZURE_MODEL_NAME: model,
+            TESTPILOT_OPENAI_API_VERSION: apiVersion,
         } = requireSettings({
-            AZURE_OPENAI_ENDPOINT: settings.azureOpenaiEndpoint,
-            AZURE_OPENAI_API_KEY: settings.azureOpenaiApiKey,
-            AZURE_DEPLOYMENT_NAME: settings.azureDeploymentName,
-            AZURE_MODEL_NAME: settings.azureModelName,
-            OPENAI_API_VERSION: settings.openaiApiVersion,
+            TESTPILOT_AZURE_OPENAI_ENDPOINT: settings.azureOpenaiEndpoint,
+            TESTPILOT_AZURE_OPENAI_API_KEY: settings.azureOpenaiApiKey,
+            TESTPILOT_AZURE_DEPLOYMENT_NAME: settings.azureDeploymentName,
+            TESTPILOT_AZURE_MODEL_NAME: settings.azureModelName,
+            TESTPILOT_OPENAI_API_VERSION: settings.openaiApiVersion,
         });
         this.client = new AzureOpenAI({ endpoint, deployment, apiKey, apiVersion });
         this.model = model;

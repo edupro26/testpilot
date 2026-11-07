@@ -11,9 +11,9 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createConnection } from '@playwright/mcp';
 import { type BrowserContext, chromium, type Page } from '@playwright/test';
 
-import { errorMessage, McpError } from '../../exceptions.ts';
 import { logger } from '../../logger.ts';
 import type { StepStatement } from '../../model/test-case.ts';
+import { errorMessage, McpError } from '../../runtime/exceptions.ts';
 import { CHROMIUM_ARGS, runStatements } from '../../validator/browser.ts';
 import {
     ALLOWED_TOOLS,
@@ -103,7 +103,7 @@ export function mcpConfig(): McpConfig {
         capabilities: ['testing'],
         // Every tool result reports the TypeScript it ran: the code we collect.
         codegen: 'typescript',
-        outputDir: '.playwright-mcp',
+        outputDir: '.testpilot/.playwright-mcp',
     };
 }
 

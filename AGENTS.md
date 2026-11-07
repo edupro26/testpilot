@@ -10,16 +10,17 @@ examples/                           # sample test-case markdown inputs, grouped 
 output/                             # gitignored, per-run generated artifacts, mirrored per examples/ subfolder
 prompts/                            # one template per pipeline stage ({{placeholder}} syntax)
 src/
+├── cli/                            # the testpilot program: cli.ts (commands), one file per command
 ├── extractor/                      # agent drives Playwright MCP, collects emitted code
 ├── generator/                      # LLM assembles the script around the validated statements
 ├── llm/                            # LLM provider abstraction: protocol, factory, provider/
 ├── model/                          # shared JSON-contract schemas (TestCase, StepStatement, ...)
+├── runtime/                        # pipeline.ts (runPipeline, extract-then-validate loop) + exceptions.ts
 ├── structurer/                     # markdown -> structured JSON
 ├── validator/                      # browser.ts (replay) + service.ts (semantic check)
 ├── config.ts                       # Settings (zod) + configureLogging
-├── exceptions.ts                   # PipelineError, per-stage errors, ConfigurationError
 ├── logger.ts                       # levelled, coloured stderr logger
-├── main.ts                         # CLI entrypoint and pipeline wiring
+├── main.ts                         # the testpilot executable: runs the CLI
 └── prompt-loader.ts                # loadPrompt / renderPrompt
 test/                               # Vitest suite mirroring src/
 playwright.config.ts                # runs the generated specs in output/
@@ -42,8 +43,7 @@ playwright.config.ts                # runs the generated specs in output/
 ## Dev workflow
 
 ```
-npm ci                               # install dependencies
-npx playwright install chromium      # the one browser build everything uses
+npm ci                               # install dependencies + testpilot's Chromium (postinstall)
 npm run typecheck                    # type-check (tsc)
 npm run lint                         # lint (ESLint, type-aware)
 npm run format                       # format (Prettier)
@@ -51,7 +51,8 @@ npm test                             # run the test suite (Vitest)
 npm run check                        # all of the above, without writing
 
 npm link                             # once: puts `testpilot` on the PATH
-testpilot <path.md>                  # or, without linking: npm run testpilot -- <path.md>
+testpilot doctor                     # check the setup; prints the fix for anything missing
+testpilot generate <path.md>         # or, without linking: npm run testpilot -- generate <path.md>
 npx playwright test <output/.../x.spec.ts>
 ```
 
@@ -63,7 +64,7 @@ client talks to it over an in-memory transport, so there is no server to start
 and no port to configure. A retry reset closes the session and opens a new one.
 
 Each session gets a freshly launched headless Chromium, whose context
-(locale from `BROWSER_LOCALE`) is handed to the server (`playwrightServer()` in
+(locale from the `locale` setting) is handed to the server (`playwrightServer()` in
 `src/extractor/mcp/server.ts`). A fresh browser means a fresh profile, so
 consent banners reappear every run: with a persisted profile the agent never
 learns to dismiss them and the generated script trips over one. The
@@ -77,7 +78,7 @@ The server's configuration (`mcpConfig()`):
 | `codegen: "typescript"` | The whole mechanism. Each tool result reports the TypeScript statement it ran (in a `` ```js `` fence), which is what the Extractor collects. TypeScript is the only language every tool honours. |
 | `capabilities: ["testing"]` | Adds the `browser_verify_*` assertion tools. Without them a verification step has no assertion to collect. |
 | `browser.isolated: false` | Use the context the session is given; `true` would make the server try to open a context of its own. |
-| `outputDir` | Or the server writes `.playwright-mcp/` into the current working directory. |
+| `outputDir` | `.testpilot/.playwright-mcp`, or the server writes `.playwright-mcp/` into the project root. |
 
 ### One Playwright
 

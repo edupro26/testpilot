@@ -7,11 +7,11 @@
  * each late assertion's measured timeout into its matcher's options.
  */
 
-import { GeneratorError } from '../exceptions.ts';
 import type { LLMProvider } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
 import { statement, type TestCase } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
+import { GeneratorError } from '../runtime/exceptions.ts';
 import {
     describeSteps,
     localeSetting,

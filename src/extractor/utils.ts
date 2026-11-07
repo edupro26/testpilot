@@ -1,7 +1,7 @@
 /** Helpers for the Extractor: compiling statements, prompt context, collection checks. */
 
-import { ExtractorError } from '../exceptions.ts';
 import type { Module } from '../model/test-case.ts';
+import { ExtractorError } from '../runtime/exceptions.ts';
 
 const AsyncFunction = async function () {
     /* only its constructor is used */

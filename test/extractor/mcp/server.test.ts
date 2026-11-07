@@ -4,7 +4,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BrowserContext } from '@playwright/test';
 import { describe, expect, test } from 'vitest';
 
-import { McpError } from '../../../src/exceptions.ts';
 import {
     ALLOWED_TOOLS,
     COLLECTABLE_TOOLS,
@@ -16,6 +15,7 @@ import {
     type ServerFactory,
 } from '../../../src/extractor/mcp/server.ts';
 import { statement } from '../../../src/model/test-case.ts';
+import { McpError } from '../../../src/runtime/exceptions.ts';
 import { emitted } from '../fakes.ts';
 
 const CLICK = "await page.getByRole('button', { name: 'Consent' }).click();";
