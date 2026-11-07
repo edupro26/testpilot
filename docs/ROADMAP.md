@@ -6,13 +6,13 @@ What is planned next for the application. The current design is described in [AP
 
 Comes before every other item. The goal is to let an agent such as GitHub Copilot in VS Code drive testpilot from inside a developer's own webapp project: testpilot is installed once per machine, set up once per project, and the agent learns how to use it from skills. The three tasks are worked on in any order.
 
-| # | Task | Description |
-|---|---|---|
-| A | Installation and project setup | Go from `git clone` to a `testpilot` command on the PATH, and set a project up with `testpilot init`. Detailed below. |
-| B | CLI commands | Design and build every command and flag the agent needs. Detailed below. |
-| C | Skills | Write the skill that teaches an agent how to use testpilot, installed by `testpilot init --skills`. Detailed below. |
+| # | Task | Description | Status |
+|---|---|---|---|
+| A | Installation and project setup | Go from `git clone` to a `testpilot` command on the PATH, and set a project up with `testpilot init`. Detailed below. | Done |
+| B | CLI commands | Design and build every command and flag the agent needs. Detailed below. | Next |
+| C | Skills | Write the skill that teaches an agent how to use testpilot, installed by `testpilot init --skills`. Detailed below. | Planned |
 
-### A. Installation and project setup
+### A. Installation and project setup (done)
 
 **Once per machine**, inside the testpilot clone:
 
@@ -37,8 +37,10 @@ Generated tests run with the project's own Playwright and `playwright.config.*`,
 
 - Node.js ≥ 24
 - testpilot's Chromium build is installed (it can be removed by Playwright's cleanup if the clone is moved or deleted)
-- the project has `@playwright/test` and a `playwright.config.*`, warning when its Playwright is older than testpilot's (the code Playwright MCP emits follows testpilot's version)
-- the LLM settings are present, API key included
+- the project has `@playwright/test` and a `playwright.config.*`, warning when its Playwright is older than testpilot's (the code Playwright MCP emits follows testpilot's version); when `package.json` already lists `@playwright/test`, the fix is `npm install` rather than `npm init playwright@latest`
+- the LLM settings are valid and present, API key included (a broken `config.json` or an unreadable `.env` is a failed check, never a crash)
+
+It exits with `2` when any check fails; warnings do not fail.
 
 **`testpilot init`** runs `doctor` first and stops on a failed check, except the LLM settings check (the LLM is configured afterwards). It then reads the project's `testDir` and writes only what testpilot cannot know by itself:
 
@@ -57,7 +59,9 @@ Every other setting keeps its default until it is set, and the Azure block comes
     tests/                      # the validated JSON test case of each run
 ```
 
-Re-running `init` is safe: it never overwrites an existing file, and only adds `scriptsDir` to a `config.json` that lacks it. That is also how `init --skills` (task C) adds or updates the skills in a project already set up.
+Without a string-literal `testDir` in the Playwright config, `scriptsDir` falls back to `testpilot` (Playwright's default `testDir` is the config's own folder), with a warning when `testDir` is set some other way.
+
+Re-running `init` is safe: it never overwrites an existing file, and only adds `scriptsDir` to a `config.json` that lacks it; a `config.json` that is not a valid JSON object is left untouched for the developer to fix. That is also how `init --skills` (task C) adds or updates the skills in a project already set up.
 
 #### Settings
 
@@ -100,21 +104,21 @@ Precedence, weakest first: defaults, `config.json`, the project's `.env`, the pr
 
 Out of scope for now: publishing testpilot to a package registry. That needs a build step (Node does not strip types from `.ts` files inside `node_modules/`), and is planned later.
 
-### B. CLI commands
+### B. CLI commands (next)
 
-Today's `main.ts` is split in two: `src/runtime/pipeline.ts` (orchestration) and `src/cli/` (`cli.ts`, the commander program, plus one file per command). `testpilot config` has only the `list` and `set-azure-openai` subcommands; other settings are edited by hand in `config.json`.
+The structure is in place since task A: `src/main.ts` is the thin entrypoint, `src/cli/` holds the commander program (`cli.ts`) plus one file per command (`generate.ts`, `doctor.ts`, `init.ts`) and the shared exit handling (`errors.ts`), and `src/runtime/` holds the pipeline (`pipeline.ts`) and its errors (`exceptions.ts`). New commands are registered in `buildProgram()` in `src/cli/cli.ts`. `testpilot config` has only the `list` and `set-azure-openai` subcommands; other settings are edited by hand in `config.json`.
 
-| Command | What it does | When |
+| Command | What it does | Status |
 |---|---|---|
-| `testpilot --help`, `testpilot help <command>`, `testpilot <command> --help` | Usage, from commander | Now |
-| `testpilot --version` | The installed version | Now |
-| `testpilot doctor` | Checks the setup (task A) and prints the fix for each failure | Now |
-| `testpilot init` | Sets the project up (task A) | Now |
+| `testpilot --help`, `testpilot help <command>`, `testpilot <command> --help` | Usage, from commander | Done |
+| `testpilot doctor` | Checks the setup and prints the fix for each failure (task A) | Done |
+| `testpilot init` | Sets the project up (task A) | Done |
+| `testpilot generate <path.md>` | Generates the script for a test case (below) | Partly done: runs the pipeline, but without flags and still writing to `output/<input's folder>/` |
+| `testpilot --version` | The installed version | To do |
+| `testpilot config list` | Every effective setting, the source it came from, API keys masked | To do |
+| `testpilot config set-azure-openai` | Writes the Azure OpenAI settings (below) | To do |
 | `testpilot init --skills=<agents>` | Also installs the skills into the project, e.g. `--skills=copilot,claude` | With task C |
 | `testpilot init --skills=<agents> -g` | Installs the skills into the user's agent folders (e.g. `~/.copilot/skills/`) for every project | Later |
-| `testpilot config list` | Every effective setting, the source it came from, API keys masked | Now |
-| `testpilot config set-azure-openai` | Writes the Azure OpenAI settings (below) | Now |
-| `testpilot generate <path.md>` | Generates the script for a test case (below) | Now |
 | `testpilot run <path.spec.ts>` | Runs a generated script with the project's Playwright; see Planned item 1 | Later |
 | `testpilot update` | `git pull && npm ci` in the clone, then re-checks testpilot's Chromium | Later |
 | `testpilot logs [run]` | Lists recent generate runs, or prints one run's log (the latest by default) | Later |
@@ -152,14 +156,24 @@ testpilot generate <path.md> \
 - `--headed` shows the browser the agent drives.
 - `--out`, `--max-turns`, `--locale` and `--log-level` override `scriptsDir`, `maxTurns`, `locale` and `logLevel` for this run.
 - `--json` prints a machine-readable result on stdout: status, spec path, JSON test case path, log path, and on failure the error code, failing stage, failing step and a hint (see task C).
-- The validated JSON goes to `.testpilot/tests/`, the log to `.testpilot/logs/`, the spec to the scripts folder.
+- The validated JSON goes to `.testpilot/tests/`, the log to `.testpilot/logs/`, the spec to the scripts folder (`scriptsDir`). Today `generate` writes both the JSON and the spec to `output/<input's folder>/` and keeps no log file; `scriptsDir` is already read and validated, but nothing uses it yet. This repo's own `playwright.config.ts` (`testDir: './output'`) needs to follow.
 
 **Built for agents.** Every command:
 
 - never prompts unless it runs in an interactive terminal, so an agent never hangs on a question;
-- exits with `0` on success, `1` when the test case fails to generate, `2` on a setup or config error;
+- exits with `0` on success, `1` when the test case fails to generate, `2` on a setup or config error (already true for `doctor`, `init`, invalid settings and a missing input file; commander's own usage errors, such as an unknown command, still exit with `1`);
 - writes progress to stderr and results to stdout, and always prints the log path;
 - reports progress steadily during long runs (`generate` takes minutes), so it never looks stuck.
+
+**Follow-ups from task A's review**, to settle while building task B:
+
+- Align the `scriptsDir` default (`tests/testpilot` when unset) with `init`'s fallback (`testpilot`), so a project that never ran `init` still writes where Playwright finds the specs.
+- `config list` should name the source of each value; today an invalid value from `.env`, `.env.local` or the shell is reported without naming its file.
+- The guard that rejects an API key in `config.json` only matches keys named `apiKey` / `api_key`; widen it to names such as `TESTPILOT_AZURE_OPENAI_API_KEY` or `azureOpenAIApiKey` (they are rejected today, but with the generic unknown-key message).
+- `init` reads the first `testDir:` in the config text, comments included; skip comments.
+- `doctor` and `init` only look at the working directory; from a project subfolder they suggest scaffolding a second Playwright project. Walk up to the nearest `package.json`, or say to run from the project root.
+- `doctor` output: indent multi-line error messages, and fit the fix text to the error (e.g. "remove the key from config.json" rather than "fill in config.json").
+- Tests: the rejected-bare-form test prints commander's error into the test output, and the `doctor` command test launches the real Chromium.
 
 ### C. Skills
 
