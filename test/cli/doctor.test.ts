@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, test, vi } from 'vitest';
+import { chromium } from '@playwright/test';
+import { afterEach, describe, expect, type MockInstance, test, vi } from 'vitest';
 
 import { runCli } from '../../src/cli/cli.ts';
 import {
@@ -15,8 +16,10 @@ import {
     checkProjectPlaywright,
     compareVersions,
     findPlaywrightConfig,
+    formatChecks,
+    runChecks,
 } from '../../src/cli/doctor.ts';
-import { useIsolatedSettingsEnv } from '../helpers.ts';
+import { stdout, useCapturedOutput, useIsolatedSettingsEnv } from '../helpers.ts';
 
 const AZURE_ENV = {
     TESTPILOT_AZURE_OPENAI_ENDPOINT: 'https://example.openai.azure.com',
@@ -121,7 +124,54 @@ test('LLM settings: configured Azure passes, unconfigured fails naming what is m
     const check = checkLlmSettings({}, root);
     expect(check.status).toBe('fail');
     expect(check.detail).toMatch(/TESTPILOT_AZURE_OPENAI_ENDPOINT/);
-    expect(check.fix).toMatch(/TESTPILOT_AZURE_OPENAI_API_KEY/);
+    expect(check.fix).toMatch(/testpilot config set-azure-openai/);
+});
+
+test('missing Azure settings point to config set-azure-openai', async () => {
+    const check = checkLlmSettings({}, await emptyDir());
+
+    expect(check.fix).toContain('testpilot config set-azure-openai');
+    expect(check.fix).toContain('--prompt-api-key');
+});
+
+test('an API key in config.json gets the remove-it fix', async () => {
+    const root = await emptyDir();
+    await mkdir(path.join(root, '.testpilot'));
+    await writeFile(
+        path.join(root, '.testpilot', 'config.json'),
+        JSON.stringify({ azureOpenAI: { apiKey: 'fake-key' } }),
+    );
+
+    const check = checkLlmSettings(AZURE_ENV, root);
+
+    expect(check.status).toBe('fail');
+    expect(check.fix).toBe(
+        'Remove the API key from .testpilot/config.json; set it with: ' +
+            'testpilot config set-azure-openai --prompt-api-key',
+    );
+});
+
+test('a bad value names the file or place to fix', async () => {
+    const root = await emptyDir();
+    await mkdir(path.join(root, '.testpilot'));
+    await writeFile(path.join(root, '.testpilot', 'config.json'), '{ not json');
+    expect(checkLlmSettings(AZURE_ENV, root).fix).toBe('Fix .testpilot/config.json');
+
+    const other = await emptyDir();
+    await writeFile(path.join(other, '.env.local'), 'TESTPILOT_MAX_TURNS=many\n');
+    expect(checkLlmSettings(AZURE_ENV, other).fix).toBe('Fix the value in .env.local');
+
+    expect(
+        checkLlmSettings({ ...AZURE_ENV, TESTPILOT_MAX_TURNS: 'many' }, other).fix,
+    ).toBe('Fix the value in the shell environment');
+});
+
+test('multi-line details are indented under their check', () => {
+    expect(
+        formatChecks([
+            { name: 'LLM settings', status: 'fail', detail: 'a\nb', fix: 'f' },
+        ]),
+    ).toBe('✖ LLM settings: a\n    b\n    fix: f');
 });
 
 test('a broken config.json is a failed check, not a crash', async () => {
@@ -140,15 +190,44 @@ test('compareVersions orders numerically', () => {
     expect(compareVersions('1.64.1-alpha', '1.64.1')).toBe(0);
 });
 
+test('from a project subfolder the checks look at the project root', async () => {
+    const root = await emptyDir();
+    await writeFile(path.join(root, 'package.json'), '{}');
+    await writeFile(path.join(root, 'playwright.config.ts'), 'export default {};');
+    const nested = path.join(root, 'src', 'pages');
+    await mkdir(nested, { recursive: true });
+    const previous = process.cwd();
+    process.chdir(nested);
+    try {
+        const checks = await runChecks({ launchChromium: () => Promise.resolve() });
+        expect(
+            checks.find((check) => check.name === 'Playwright config'),
+        ).toMatchObject({
+            status: 'ok',
+        });
+    } finally {
+        process.chdir(previous);
+    }
+});
+
 describe('the doctor command', () => {
+    let launch: MockInstance<typeof chromium.launch> | undefined;
+
     useIsolatedSettingsEnv();
+    useCapturedOutput();
+
+    afterEach(() => {
+        launch?.mockRestore();
+    });
 
     test('outside a Node project it exits 2 and prints each fix', async () => {
-        const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+        launch = vi.spyOn(chromium, 'launch').mockResolvedValue({
+            close: () => Promise.resolve(),
+        } as never);
 
         expect(await runCli(['doctor'])).toBe(2);
 
-        const output = write.mock.calls.map(([chunk]) => String(chunk)).join('');
+        const output = stdout();
         expect(output).toContain('✖ Project Playwright');
         expect(output).toContain('npm init playwright@latest');
         expect(output).toContain('✖ LLM settings');

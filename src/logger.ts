@@ -1,6 +1,9 @@
 /** Application logger: levelled, timestamped, colour-coded lines on stderr. */
 
+import { appendFileSync } from 'node:fs';
 import { inspect } from 'node:util';
+
+import { errorMessage } from './runtime/exceptions.ts';
 
 export const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] as const;
 
@@ -26,18 +29,63 @@ export function setLogLevel(level: LogLevel): void {
     threshold = LOG_LEVELS.indexOf(level);
 }
 
-function emit(level: LogLevel, message: string, error?: unknown): void {
-    if (LOG_LEVELS.indexOf(level) < threshold) {
+let logFile: string | undefined;
+
+/**
+ * Also append every emitted line to `file`.
+ *
+ * The file gets the same lines as standard error, at the same level, without
+ * colour codes and with error stacks. Each line is written synchronously, so a
+ * crash never loses the last ones. The folder must exist.
+ *
+ * @param file - The file to append to, or `undefined` to stop.
+ */
+export function setLogFile(file: string | undefined): void {
+    logFile = file;
+}
+
+let lastLine = Date.now();
+
+/**
+ * When the last line was written, as `Date.now()` reads.
+ *
+ * Counts every line that passes the threshold, `logger.always` included; a
+ * dropped line does not count.
+ *
+ * @returns The time of the last line, in ms since the epoch.
+ */
+export function lastLineAt(): number {
+    return lastLine;
+}
+
+function emit(
+    level: LogLevel,
+    message: string,
+    error?: unknown,
+    ignoreThreshold = false,
+): void {
+    if (!ignoreThreshold && LOG_LEVELS.indexOf(level) < threshold) {
         return;
     }
     const time = new Date().toTimeString().slice(0, 8);
-    const lines = [
-        `[${time}] [${LEVEL_COLORS[level]}${level}${COLOR_RESET}] ${message}`,
-    ];
-    if (error !== undefined) {
-        lines.push(formatError(error));
+    const detail = error === undefined ? '' : `\n${formatError(error)}`;
+    const colored = `${LEVEL_COLORS[level]}${level}${COLOR_RESET}`;
+    console.error(`[${time}] [${colored}] ${message}${detail}`);
+    lastLine = Date.now();
+    if (logFile !== undefined) {
+        try {
+            appendFileSync(logFile, `[${time}] [${level}] ${message}${detail}\n`);
+        } catch (failure) {
+            // A broken log file must never end, or mask the outcome of, the run.
+            const file = logFile;
+            logFile = undefined;
+            console.error(
+                `[${time}] [${LEVEL_COLORS.WARNING}WARNING${COLOR_RESET}] ` +
+                    `Cannot write to the log file ${file}, so it stops here: ` +
+                    errorMessage(failure),
+            );
+        }
     }
-    console.error(lines.join('\n'));
 }
 
 /** Render `error` and its `cause` chain, stack traces included. */
@@ -63,6 +111,10 @@ export const logger = {
     },
     info: (message: string): void => {
         emit('INFO', message);
+    },
+    /** Log `message` as an INFO line whatever the level, e.g. where the log is. */
+    always: (message: string): void => {
+        emit('INFO', message, undefined, true);
     },
     warning: (message: string): void => {
         emit('WARNING', message);

@@ -24,7 +24,6 @@
 /playwright/.auth/
 
 # Testpilot artifacts
-.testpilot/
 .playwright-mcp
 output/
 

@@ -4,7 +4,14 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { CONFIG_DIR, CONFIG_FILE, type ConfigFile } from '../config.ts';
+import {
+    CONFIG_DIR,
+    CONFIG_FILE,
+    type ConfigFile,
+    findProjectRoot,
+    readConfigObject,
+} from '../config.ts';
+import { ConfigurationError } from '../runtime/exceptions.ts';
 import { type Check, findPlaywrightConfig, formatChecks, runChecks } from './doctor.ts';
 import { CliExit } from './errors.ts';
 
@@ -19,14 +26,28 @@ const GITIGNORE = ['logs/', 'tests/', '.playwright-mcp/'].join('\n') + '\n';
 // `testDir: '<path>'`, with any quote style; a template with `${` is not a literal.
 const TEST_DIR = /\btestDir\s*:\s*(['"`])((?:(?!\1|\$\{).)*)\1/;
 
+// A string, a line comment or a block comment, in the order a scan meets them, so a
+// `//` inside a string (`'http://localhost'`) is part of that string.
+const STRINGS_AND_COMMENTS =
+    /(['"`])(?:\\[\s\S]|(?!\1)[^\\])*\1|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+
 /**
  * The string literal assigned to `testDir` in a Playwright config's text.
+ *
+ * Comments are ignored.
  *
  * @param configText - The config file's source.
  * @returns The literal, or `undefined` if there is none.
  */
 export function readTestDir(configText: string): string | undefined {
-    return TEST_DIR.exec(configText)?.[2];
+    return TEST_DIR.exec(stripComments(configText))?.[2];
+}
+
+/** The text without its comments; strings are kept as they are. */
+function stripComments(text: string): string {
+    return text.replace(STRINGS_AND_COMMENTS, (match, quote: string | undefined) =>
+        quote === undefined ? '' : match,
+    );
 }
 
 /**
@@ -44,7 +65,7 @@ export function readTestDir(configText: string): string | undefined {
 export async function initCommand(
     options: { cwd?: string; checks?: () => Promise<Check[]> } = {},
 ): Promise<void> {
-    const { cwd = process.cwd(), checks = () => runChecks({ cwd }) } = options;
+    const { cwd = findProjectRoot(), checks = () => runChecks({ cwd }) } = options;
     const results = await checks();
     print(formatChecks(results));
     const failed = results.filter((check) => check.status === 'fail');
@@ -60,8 +81,8 @@ export async function initCommand(
     print(`${status} ${toPosix(CONFIG_FILE)}${note}`);
     if (failed.length > 0) {
         print(
-            '\nNext: add your Azure OpenAI settings to .testpilot/config.json and ' +
-                'set TESTPILOT_AZURE_OPENAI_API_KEY.',
+            '\nNext: run `testpilot config set-azure-openai` to set your Azure OpenAI ' +
+                'settings; add `--prompt-api-key` to enter the API key.',
         );
     }
 }
@@ -75,7 +96,7 @@ async function scriptsDirFor(cwd: string): Promise<string> {
     if (
         testDir === undefined &&
         configFile !== undefined &&
-        /\btestDir\b/.test(configText)
+        /\btestDir\b/.test(stripComments(configText))
     ) {
         print(
             `! Could not read testDir from ${path.basename(configFile)}; ` +
@@ -107,22 +128,20 @@ async function writeConfig(
     scriptsDir: string,
 ): Promise<[status: string, note?: string]> {
     const file = path.join(cwd, CONFIG_FILE);
-    let config: ConfigFile = {};
-    if (existsSync(file)) {
-        let parsed: unknown;
-        try {
-            parsed = JSON.parse(await readFile(file, 'utf8'));
-        } catch {
-            return ['kept', ' (not valid JSON; fix it by hand)'];
+    let existing: ConfigFile | undefined;
+    try {
+        existing = await readConfigObject(file);
+    } catch (error) {
+        if (error instanceof ConfigurationError) {
+            const reason = error.message.slice(`${toPosix(CONFIG_FILE)}: `.length);
+            return ['kept', ` (${reason}; fix it by hand)`];
         }
-        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-            return ['kept', ' (not a JSON object; fix it by hand)'];
-        }
-        config = parsed;
-        if (config.scriptsDir !== undefined) {
-            return ['kept'];
-        }
+        throw error;
     }
+    if (existing?.scriptsDir !== undefined) {
+        return ['kept'];
+    }
+    const config = existing ?? {};
     const status = existsSync(file) ? 'updated' : 'created';
     await writeFile(
         file,

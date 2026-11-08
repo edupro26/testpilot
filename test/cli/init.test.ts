@@ -67,6 +67,12 @@ test('readTestDir reads a literal and nothing else', () => {
     expect(readTestDir('testDir: `${root}/e2e`')).toBeUndefined();
 });
 
+test('readTestDir skips comments but not URLs', () => {
+    expect(readTestDir("// testDir: './old',\ntestDir: './e2e'")).toBe('./e2e');
+    expect(readTestDir("/* testDir: 'x' */ testDir: 'y'")).toBe('y');
+    expect(readTestDir("use: { baseURL: 'http://a' }, testDir: 'z'")).toBe('z');
+});
+
 test('init writes the scripts folder and the .gitignore, nothing else', async () => {
     const cwd = await project();
 
@@ -162,8 +168,8 @@ test('missing LLM settings do not stop init', async () => {
 
     expect(existsSync(path.join(cwd, '.testpilot', 'config.json'))).toBe(true);
     expect(printed()).toContain(
-        'Next: add your Azure OpenAI settings to .testpilot/config.json and set ' +
-            'TESTPILOT_AZURE_OPENAI_API_KEY.',
+        'Next: run `testpilot config set-azure-openai` to set your Azure OpenAI ' +
+            'settings; add `--prompt-api-key` to enter the API key.',
     );
 });
 

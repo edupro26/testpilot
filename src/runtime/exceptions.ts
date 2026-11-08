@@ -15,6 +15,11 @@ export class McpError extends PipelineError {
     override name = 'McpError';
 }
 
+/** Raised when Chromium cannot be launched, e.g. it is not installed. */
+export class BrowserLaunchError extends PipelineError {
+    override name = 'BrowserLaunchError';
+}
+
 /** Raised when the Extractor cannot produce a valid Module. */
 export class ExtractorError extends PipelineError {
     override name = 'ExtractorError';
@@ -33,6 +38,19 @@ export class GeneratorError extends PipelineError {
 /** Raised when required application configuration is missing or invalid. */
 export class ConfigurationError extends Error {
     override name = 'ConfigurationError';
+
+    /** Where the offending value came from, e.g. `.env.local`; if known. */
+    readonly source: string | undefined;
+
+    constructor(message: string, options?: ErrorOptions & { source?: string }) {
+        super(message, options);
+        this.source = options?.source;
+    }
+}
+
+/** Raised when `config.json` holds an API key, which is only read from the environment. */
+export class ApiKeyInConfigError extends ConfigurationError {
+    override name = 'ApiKeyInConfigError';
 }
 
 /**

@@ -17,6 +17,7 @@ import {
 import {
     extractAndValidate,
     MAX_RETRIES,
+    type RunProgress,
     type Stages,
 } from '../../src/runtime/pipeline.ts';
 import { BrowserError } from '../../src/validator/browser.ts';
@@ -235,5 +236,92 @@ describe('extractAndValidate', () => {
             );
             expect(fake.mcp.reset).not.toHaveBeenCalled();
         }
+    });
+
+    describe('progress', () => {
+        function progress(): RunProgress {
+            return { stage: undefined, step: undefined };
+        }
+
+        test('names the stage, and the step of each extraction', async () => {
+            // What the CLI reports when a run fails mid-way.
+            const seen: RunProgress[] = [];
+            const run = progress();
+            const fake = stages([], []);
+            fake.validator.validate.mockImplementation((validated) => {
+                seen.push({ ...run });
+                return Promise.resolve({ ok: true, testCase: validated, runTimeMs: 1 });
+            });
+            fake.extractor.runStep.mockImplementation(() => {
+                seen.push({ ...run });
+                return Promise.resolve({ statements: statements(CLICK) });
+            });
+
+            await extractAndValidate(testCase(['Open', 'Log in']), fake, run);
+
+            expect(seen).toEqual([
+                { stage: 'extract', step: 'Open' },
+                { stage: 'extract', step: 'Log in' },
+                { stage: 'validate', step: undefined },
+            ]);
+        });
+
+        test('a failing replay names its step; its re-extraction moves back to extract', async () => {
+            const run = progress();
+            const fake = stages([], []);
+            const seen: RunProgress[] = [];
+            fake.validator.validate
+                .mockImplementationOnce((validated) => {
+                    seen.push({ ...run });
+                    return Promise.resolve({
+                        ok: false,
+                        testCase: validated,
+                        failure: { ref: { module: 0, step: 1 }, feedback: 'nope' },
+                    });
+                })
+                .mockImplementationOnce((validated) => {
+                    seen.push({ ...run });
+                    return Promise.resolve({
+                        ok: true,
+                        testCase: validated,
+                        runTimeMs: 1,
+                    });
+                });
+            fake.extractor.runStep.mockImplementation(() => {
+                seen.push({ ...run });
+                return Promise.resolve({ statements: statements(CLICK) });
+            });
+
+            await extractAndValidate(testCase(['Open', 'Log in']), fake, run);
+
+            // Open, Log in, replay (fails), re-extraction of Log in, replay.
+            expect(seen).toEqual([
+                { stage: 'extract', step: 'Open' },
+                { stage: 'extract', step: 'Log in' },
+                { stage: 'validate', step: undefined },
+                { stage: 'extract', step: 'Log in' },
+                { stage: 'validate', step: undefined },
+            ]);
+        });
+
+        test('keeps the failing replay step when the retries run out', async () => {
+            const run = progress();
+            const fake = stages([], []);
+            fake.validator.validate.mockImplementation((validated) =>
+                Promise.resolve({
+                    ok: false,
+                    testCase: validated,
+                    failure: { ref: { module: 0, step: 0 }, feedback: 'nope' },
+                }),
+            );
+            fake.extractor.runStep.mockResolvedValue({ statements: statements(GOTO) });
+
+            await expect(
+                extractAndValidate(testCase(['Open']), fake, run),
+            ).rejects.toBeInstanceOf(ValidatorError);
+
+            // The budget runs out inside `redo`, after the replay failed.
+            expect(run.step).toBe('Open');
+        });
     });
 });

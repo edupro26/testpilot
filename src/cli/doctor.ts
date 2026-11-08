@@ -6,9 +6,13 @@ import path from 'node:path';
 
 import { chromium } from '@playwright/test';
 
-import { loadSettings } from '../config.ts';
+import { findProjectRoot, loadSettings } from '../config.ts';
 import { getLlmProvider } from '../llm/factory.ts';
-import { ConfigurationError, errorMessage } from '../runtime/exceptions.ts';
+import {
+    ApiKeyInConfigError,
+    ConfigurationError,
+    errorMessage,
+} from '../runtime/exceptions.ts';
 import { CHROMIUM_ARGS } from '../validator/browser.ts';
 import { CliExit } from './errors.ts';
 
@@ -162,10 +166,32 @@ export function checkLlmSettings(env: NodeJS.ProcessEnv, cwd: string): Check {
             name: 'LLM settings',
             status: 'fail',
             detail: error.message,
-            fix:
-                'Fill in .testpilot/config.json, and set ' +
-                'TESTPILOT_AZURE_OPENAI_API_KEY in the environment, .env or .env.local',
+            fix: llmSettingsFix(error),
         };
+    }
+}
+
+/** What to change, given why the LLM settings are invalid or incomplete. */
+function llmSettingsFix(error: ConfigurationError): string {
+    if (error instanceof ApiKeyInConfigError) {
+        return (
+            'Remove the API key from .testpilot/config.json; set it with: ' +
+            'testpilot config set-azure-openai --prompt-api-key'
+        );
+    }
+    switch (error.source) {
+        case undefined:
+            return (
+                'Run testpilot config set-azure-openai with your Azure OpenAI ' +
+                'settings, then testpilot config set-azure-openai --prompt-api-key ' +
+                'in your own terminal'
+            );
+        case 'config.json':
+            return 'Fix .testpilot/config.json';
+        case 'environment':
+            return 'Fix the value in the shell environment';
+        default:
+            return `Fix the value in ${error.source}`;
     }
 }
 
@@ -204,7 +230,7 @@ export async function runChecks(
     } = {},
 ): Promise<Check[]> {
     const {
-        cwd = process.cwd(),
+        cwd = findProjectRoot(),
         env = process.env,
         launchChromium = launchOwnChromium,
     } = options;
@@ -230,7 +256,8 @@ export function formatChecks(checks: Check[]): string {
     const symbols = { ok: '✔', warn: '!', fail: '✖' } as const;
     return checks
         .flatMap((check) => [
-            `${symbols[check.status]} ${check.name}: ${check.detail}`,
+            `${symbols[check.status]} ${check.name}: ` +
+                check.detail.replaceAll('\n', '\n    '),
             ...(check.fix === undefined ? [] : [`    fix: ${check.fix}`]),
         ])
         .join('\n');

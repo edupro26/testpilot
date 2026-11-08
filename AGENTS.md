@@ -7,10 +7,11 @@
 ```
 docs/                               # APP_DESCRIPTION.md (design), ROADMAP.md (next steps)
 examples/                           # sample test-case markdown inputs, grouped by target site
-output/                             # gitignored, per-run generated artifacts, mirrored per examples/ subfolder
+output/                             # gitignored; this repo's scriptsDir is output/testpilot/ (generated specs)
+.testpilot/                         # config.json (committed); logs/, tests/ (JSON per run), .playwright-mcp/ (gitignored)
 prompts/                            # one template per pipeline stage ({{placeholder}} syntax)
 src/
-├── cli/                            # the testpilot program: cli.ts (commands), one file per command
+├── cli/                            # the testpilot program: cli.ts (commands), one file per command (generate, doctor, init, config)
 ├── extractor/                      # agent drives Playwright MCP, collects emitted code
 ├── generator/                      # LLM assembles the script around the validated statements
 ├── llm/                            # LLM provider abstraction: protocol, factory, provider/
@@ -19,11 +20,11 @@ src/
 ├── structurer/                     # markdown -> structured JSON
 ├── validator/                      # browser.ts (replay) + service.ts (semantic check)
 ├── config.ts                       # Settings (zod) + configureLogging
-├── logger.ts                       # levelled, coloured stderr logger
+├── logger.ts                       # levelled, coloured stderr logger; also appends to the run's log file
 ├── main.ts                         # the testpilot executable: runs the CLI
 └── prompt-loader.ts                # loadPrompt / renderPrompt
 test/                               # Vitest suite mirroring src/
-playwright.config.ts                # runs the generated specs in output/
+playwright.config.ts                # runs the generated specs in output/testpilot/
 ```
 
 ## Rules & Code conventions
@@ -52,8 +53,14 @@ npm run check                        # all of the above, without writing
 
 npm link                             # once: puts `testpilot` on the PATH
 testpilot doctor                     # check the setup; prints the fix for anything missing
-testpilot generate <path.md>         # or, without linking: npm run testpilot -- generate <path.md>
-npx playwright test <output/.../x.spec.ts>
+testpilot init                       # set the project up: create .testpilot/ (safe to re-run)
+testpilot --version                  # print the installed version
+testpilot config list                # every effective setting and where it came from
+testpilot config set-azure-openai    # write the Azure OpenAI settings (--help for flags)
+testpilot generate <path.md>         # or, without linking: npm run --silent testpilot -- generate <path.md>
+testpilot generate <path.md> --json  # the result as one JSON object on stdout (exit 0, 1 or 2)
+                                     # flags: --headed --out --max-turns --locale --log-level
+npx playwright test <output/testpilot/x.spec.ts>
 ```
 
 ### Playwright MCP (runs in-process)
@@ -63,7 +70,7 @@ inside the application (`createConnection` from `@playwright/mcp`) and the
 client talks to it over an in-memory transport, so there is no server to start
 and no port to configure. A retry reset closes the session and opens a new one.
 
-Each session gets a freshly launched headless Chromium, whose context
+Each session gets a freshly launched Chromium (headless, or headed with `generate --headed`), whose context
 (locale from the `locale` setting) is handed to the server (`playwrightServer()` in
 `src/extractor/mcp/server.ts`). A fresh browser means a fresh profile, so
 consent banners reappear every run: with a persisted profile the agent never
@@ -78,7 +85,7 @@ The server's configuration (`mcpConfig()`):
 | `codegen: "typescript"` | The whole mechanism. Each tool result reports the TypeScript statement it ran (in a `` ```js `` fence), which is what the Extractor collects. TypeScript is the only language every tool honours. |
 | `capabilities: ["testing"]` | Adds the `browser_verify_*` assertion tools. Without them a verification step has no assertion to collect. |
 | `browser.isolated: false` | Use the context the session is given; `true` would make the server try to open a context of its own. |
-| `outputDir` | `.testpilot/.playwright-mcp`, or the server writes `.playwright-mcp/` into the project root. |
+| `outputDir` | `.testpilot/.playwright-mcp` under the project root, absolute: Playwright MCP resolves a relative one against the working directory, which may be a project subfolder. |
 
 ### One Playwright
 

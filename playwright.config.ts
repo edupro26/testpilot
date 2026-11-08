@@ -1,7 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
 /**
- * Runs the generated test scripts, written to `output/` by the pipeline.
+ * Runs the generated test scripts. The pipeline writes them to `output/testpilot/`:
+ * that is `scriptsDir` in this repo's `.testpilot/config.json`.
  *
  * The browser is a plain Chromium context, as in the MCP and validation
  * browsers; each script pins its own locale with `test.use`.

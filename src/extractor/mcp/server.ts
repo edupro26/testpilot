@@ -5,16 +5,19 @@
  * and browser, and connects to the server over an in-memory transport.
  */
 
+import path from 'node:path';
+
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createConnection } from '@playwright/mcp';
-import { type BrowserContext, chromium, type Page } from '@playwright/test';
+import type { BrowserContext, Page } from '@playwright/test';
 
+import { CONFIG_DIR, findProjectRoot } from '../../config.ts';
 import { logger } from '../../logger.ts';
 import type { StepStatement } from '../../model/test-case.ts';
 import { errorMessage, McpError } from '../../runtime/exceptions.ts';
-import { CHROMIUM_ARGS, runStatements } from '../../validator/browser.ts';
+import { launchChromium, runStatements } from '../../validator/browser.ts';
 import {
     ALLOWED_TOOLS,
     CALL_TIMEOUT_MS,
@@ -93,9 +96,12 @@ export class McpResult {
  * The browser itself is not configured here: `playwrightServer` hands each
  * session a context of its own.
  *
+ * @param root - The project root; Playwright MCP's own output (page snapshots,
+ *   console logs) goes to `.testpilot/.playwright-mcp` under it, wherever the
+ *   command runs from.
  * @returns The server configuration.
  */
-export function mcpConfig(): McpConfig {
+export function mcpConfig(root: string): McpConfig {
     return {
         // Use the context the session is given rather than open another one.
         browser: { isolated: false },
@@ -103,7 +109,9 @@ export function mcpConfig(): McpConfig {
         capabilities: ['testing'],
         // Every tool result reports the TypeScript it ran: the code we collect.
         codegen: 'typescript',
-        outputDir: '.testpilot/.playwright-mcp',
+        // Absolute: Playwright MCP resolves a relative one against the working
+        // directory, which may be a project subfolder.
+        outputDir: path.join(root, CONFIG_DIR, '.playwright-mcp'),
     };
 }
 
@@ -117,17 +125,21 @@ export function mcpConfig(): McpConfig {
  *
  * @param locale - The browser locale (`Accept-Language`); the same one is used
  *   by the validation browser and pinned into the generated script.
+ * @param options - `headed` opens the browser in a window, to watch the agent;
+ *   headless by default. `root` is the project root (see `mcpConfig`); the
+ *   nearest folder with a `package.json` by default.
  * @returns A factory creating one server per session.
  */
-export function playwrightServer(locale: string): ServerFactory {
+export function playwrightServer(
+    locale: string,
+    options: { headed?: boolean; root?: string } = {},
+): ServerFactory {
+    const config = mcpConfig(options.root ?? findProjectRoot());
     return async () => {
-        const browser = await chromium.launch({
-            headless: true,
-            args: [...CHROMIUM_ARGS],
-        });
+        const browser = await launchChromium(options.headed !== true);
         try {
             const context = await browser.newContext({ locale });
-            const server = await createConnection(mcpConfig(), () =>
+            const server = await createConnection(config, () =>
                 Promise.resolve(context),
             );
             return {

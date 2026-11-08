@@ -1,5 +1,7 @@
 /** Tests for src/extractor/mcp: collecting, the allowlists and the client. */
 
+import path from 'node:path';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BrowserContext } from '@playwright/test';
 import { describe, expect, test } from 'vitest';
@@ -9,6 +11,7 @@ import {
     COLLECTABLE_TOOLS,
 } from '../../../src/extractor/mcp/constants.ts';
 import {
+    mcpConfig,
     McpResult,
     PlaywrightMCP,
     playwrightServer,
@@ -87,6 +90,16 @@ test('the tool allowlists', () => {
     ]) {
         expect(COLLECTABLE_TOOLS.has(name)).toBe(true);
     }
+});
+
+test("Playwright MCP's output goes under the project root, wherever we run", () => {
+    // Relative, it would land under the working directory, e.g. a subfolder.
+    const root = path.resolve('/projects/shop');
+
+    expect(mcpConfig(root).outputDir).toBe(
+        path.join(root, '.testpilot', '.playwright-mcp'),
+    );
+    expect(path.isAbsolute(mcpConfig(root).outputDir ?? '')).toBe(true);
 });
 
 describe('PlaywrightMCP', () => {

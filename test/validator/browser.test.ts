@@ -1,8 +1,10 @@
 /** Tests for src/validator/browser, against a real Chromium on `data:` URLs. */
 
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { chromium } from '@playwright/test';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { statement, type StepStatement } from '../../src/model/test-case.ts';
+import { BrowserLaunchError } from '../../src/runtime/exceptions.ts';
 import { BrowserError, ValidationBrowser } from '../../src/validator/browser.ts';
 
 const PAGE =
@@ -89,4 +91,18 @@ test('times each statement, so late content is measured, not failed', async () =
     const { durations } = error as BrowserError;
     expect(durations).toHaveLength(2);
     expect(durations[1]).toBeGreaterThanOrEqual(400);
+});
+
+test('a Chromium that cannot launch is a BrowserLaunchError, with its cause', async () => {
+    const cause = new Error('Executable does not exist');
+    const launch = vi.spyOn(chromium, 'launch').mockRejectedValueOnce(cause);
+    try {
+        const error = await ValidationBrowser.launch().catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(BrowserLaunchError);
+        expect((error as Error).message).toContain('Executable does not exist');
+        expect((error as Error).cause).toBe(cause);
+    } finally {
+        launch.mockRestore();
+    }
 });

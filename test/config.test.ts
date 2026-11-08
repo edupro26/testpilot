@@ -6,14 +6,27 @@ import path from 'node:path';
 
 import { expect, test } from 'vitest';
 
-import { loadSettings } from '../src/config.ts';
-import { ConfigurationError } from '../src/runtime/exceptions.ts';
+import {
+    findProjectRoot,
+    loadSettings,
+    readConfigObject,
+    resolveSettings,
+} from '../src/config.ts';
+import { ApiKeyInConfigError, ConfigurationError } from '../src/runtime/exceptions.ts';
 
 /** A fresh project folder, with the given `.testpilot/config.json` and dotenv files. */
 async function project(
-    files: { config?: unknown; env?: string; envLocal?: string } = {},
+    files: {
+        config?: unknown;
+        env?: string;
+        envLocal?: string;
+        packageJson?: boolean;
+    } = {},
 ): Promise<string> {
     const root = await mkdtemp(path.join(tmpdir(), 'testpilot-'));
+    if (files.packageJson === true) {
+        await writeFile(path.join(root, 'package.json'), '{}');
+    }
     if (files.config !== undefined) {
         await mkdir(path.join(root, '.testpilot'));
         await writeFile(
@@ -38,7 +51,7 @@ test('defaults apply when there is no config file and no variable', async () => 
         browserLocale: 'en-US',
         mcpMaxTurns: 25,
         logLevel: 'INFO',
-        scriptsDir: 'tests/testpilot',
+        scriptsDir: 'testpilot',
     });
 });
 
@@ -162,5 +175,126 @@ test('an invalid variable is a ConfigurationError naming it', async () => {
     // The mock is a test double, not a provider a run can select.
     expect(() => loadSettings({ TESTPILOT_LLM_PROVIDER: 'mock' }, root)).toThrow(
         ConfigurationError,
+    );
+});
+
+test('the project root is the nearest folder with a package.json', async () => {
+    const root = await project({ packageJson: true });
+    const nested = path.join(root, 'src', 'pages');
+    await mkdir(nested, { recursive: true });
+    expect(findProjectRoot(nested)).toBe(root);
+    const bare = await project();
+    expect(findProjectRoot(bare)).toBe(bare); // (tmpdir has no package.json)
+});
+
+test('each value names its source', async () => {
+    const root = await project({
+        config: { locale: 'pt-PT' },
+        env: 'TESTPILOT_MAX_TURNS=10',
+        envLocal: 'TESTPILOT_LOG_LEVEL=debug',
+    });
+    const { sources } = resolveSettings({ TESTPILOT_AZURE_OPENAI_API_KEY: 'k' }, root);
+    expect(sources).toMatchObject({
+        TESTPILOT_LOCALE: 'config.json',
+        TESTPILOT_MAX_TURNS: '.env',
+        TESTPILOT_LOG_LEVEL: '.env.local',
+        TESTPILOT_AZURE_OPENAI_API_KEY: 'environment',
+        TESTPILOT_SCRIPTS_DIR: 'default',
+    });
+    expect(sources.TESTPILOT_AZURE_OPENAI_ENDPOINT).toBeUndefined();
+});
+
+test('flags beat every other source and name themselves when invalid', async () => {
+    const root = await project({ envLocal: 'TESTPILOT_MAX_TURNS=10' });
+    const { settings, sources } = resolveSettings({ TESTPILOT_MAX_TURNS: '12' }, root, {
+        TESTPILOT_MAX_TURNS: '3',
+    });
+    expect(settings.mcpMaxTurns).toBe(3);
+    expect(sources.TESTPILOT_MAX_TURNS).toBe('flag');
+    expect(() => resolveSettings({}, root, { TESTPILOT_MAX_TURNS: '0' })).toThrow(
+        /--max-turns \(from flag\)/,
+    );
+    expect(() => resolveSettings({}, root, { TESTPILOT_MAX_TURNS: '0' })).toThrow(
+        expect.objectContaining({ source: 'flag' }),
+    );
+});
+
+test('an invalid value names the file it came from', async () => {
+    const root = await project({ envLocal: 'TESTPILOT_MAX_TURNS=abc' });
+    expect(() => loadSettings({}, root)).toThrow(
+        expect.objectContaining({
+            source: '.env.local',
+            message: expect.stringContaining(
+                'TESTPILOT_MAX_TURNS (from .env.local)',
+            ) as unknown,
+        }),
+    );
+    expect(() => loadSettings({ TESTPILOT_MAX_TURNS: '0' }, root)).toThrow(
+        expect.objectContaining({ source: 'environment' }),
+    );
+});
+
+test.each(['apiKey', 'azureOpenAIApiKey', 'TESTPILOT_AZURE_OPENAI_API_KEY', 'api-key'])(
+    'an API key named %s in config.json is refused as an API key',
+    async (name) => {
+        const root = await project({ config: { azureOpenAI: { [name]: 'secret' } } });
+        expect(() => loadSettings({}, root)).toThrow(ApiKeyInConfigError);
+    },
+);
+
+test('readConfigObject returns the object, or undefined for a missing file', async () => {
+    const root = await project({ config: { locale: 'pt-PT' } });
+    const file = path.join(root, '.testpilot', 'config.json');
+    expect(await readConfigObject(file)).toEqual({ locale: 'pt-PT' });
+    expect(await readConfigObject(path.join(root, 'absent.json'))).toBeUndefined();
+});
+
+test.each([
+    ['{ not json', 'not valid JSON'],
+    ['[1]', 'not a JSON object'],
+    ['null', 'not a JSON object'],
+])('readConfigObject rejects %s', async (text, reason) => {
+    const root = await project({ config: text });
+    await expect(
+        readConfigObject(path.join(root, '.testpilot', 'config.json')),
+    ).rejects.toMatchObject({
+        name: 'ConfigurationError',
+        source: 'config.json',
+        message: expect.stringContaining(reason) as unknown,
+    });
+});
+
+test('readConfigObject never keeps a JSON syntax error, which quotes the file', async () => {
+    const root = await project({
+        config: '{ "azureOpenAI": { "apiKey": sk-SECRET1 } }',
+    });
+    const error: unknown = await readConfigObject(
+        path.join(root, '.testpilot', 'config.json'),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ConfigurationError);
+    expect((error as Error).cause).toBeUndefined();
+    expect(String(error)).not.toContain('SECRET');
+});
+
+test.each([
+    ['TESTPILOT_SCRIPTS_DIR', '--out'],
+    ['TESTPILOT_LOCALE', '--locale'],
+] as const)('an empty %s is refused, naming its source', async (variable, flag) => {
+    const root = await project();
+
+    expect(() => resolveSettings({ [variable]: '' }, root)).toThrow(
+        expect.objectContaining({
+            source: 'environment',
+            message: expect.stringContaining(
+                `${variable} (from environment)`,
+            ) as unknown,
+        }),
+    );
+    expect(() => resolveSettings({}, root, { [variable]: '' })).toThrow(
+        expect.objectContaining({
+            source: 'flag',
+            message: expect.stringContaining(`${flag} (from flag)`) as unknown,
+        }),
     );
 });
