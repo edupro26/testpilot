@@ -9,7 +9,7 @@ Comes before every other item. The goal is to let an agent such as GitHub Copilo
 | # | Task | Description | Status |
 |---|---|---|---|
 | A | Installation and project setup | Go from `git clone` to a `testpilot` command on the PATH, and set a project up with `testpilot init`. Detailed below. | Done |
-| B | CLI commands | Design and build every command and flag the agent needs. Detailed below. | Next |
+| B | CLI commands | Design and build every command and flag the agent needs. Detailed below. | Done |
 | C | Skills | Write the skill that teaches an agent how to use testpilot, installed by `testpilot init --skills`. Detailed below. | Planned |
 
 ### A. Installation and project setup (done)
@@ -50,7 +50,7 @@ It exits with `2` when any check fails; warnings do not fail.
     config.json                 # { "scriptsDir": "<testDir>/testpilot" }
 ```
 
-Every other setting keeps its default until it is set, and the Azure block comes from `config set-azure-openai` (task B). The rest of `.testpilot/` is created by `generate` when it first writes there:
+Every other setting keeps its default until it is set, and the Azure block comes from `config set-azure-openai`. The rest of `.testpilot/` is created by `generate` when it first writes there:
 
 ```
 .testpilot/
@@ -77,7 +77,7 @@ Every setting except API keys lives in `.testpilot/config.json`. Test execution 
         "apiVersion": "2025-04-01-preview"
     },
     "scriptsDir": "tests/testpilot",
-    "maxTurns": 15,
+    "maxTurns": 25,
     "locale": "en-US",
     "logLevel": "info"
 }
@@ -100,23 +100,23 @@ Any setting can be overridden by an environment variable carrying the `TESTPILOT
 | `locale` | `TESTPILOT_LOCALE` |
 | `logLevel` | `TESTPILOT_LOG_LEVEL` |
 
-Precedence, weakest first: defaults, `config.json`, the project's `.env`, the project's `.env.local`, the shell environment, command flags. Testpilot only reads `.env` and `.env.local`; it writes to a dotenv file only when asked to (`config set-azure-openai`, task B), and then touches only its own `TESTPILOT_` lines. A developer who wants the same key in every project exports it in their shell profile.
+Precedence, weakest first: defaults, `config.json`, the project's `.env`, the project's `.env.local`, the shell environment, command flags. Testpilot only reads `.env` and `.env.local`; it writes to a dotenv file only when asked to (`config set-azure-openai`), and then touches only its own `TESTPILOT_` lines. A developer who wants the same key in every project exports it in their shell profile.
 
 Out of scope for now: publishing testpilot to a package registry. That needs a build step (Node does not strip types from `.ts` files inside `node_modules/`), and is planned later.
 
-### B. CLI commands (next)
+### B. CLI commands (done)
 
-The structure is in place since task A: `src/main.ts` is the thin entrypoint, `src/cli/` holds the commander program (`cli.ts`) plus one file per command (`generate.ts`, `doctor.ts`, `init.ts`) and the shared exit handling (`errors.ts`), and `src/runtime/` holds the pipeline (`pipeline.ts`) and its errors (`exceptions.ts`). New commands are registered in `buildProgram()` in `src/cli/cli.ts`. `testpilot config` has only the `list` and `set-azure-openai` subcommands; other settings are edited by hand in `config.json`.
+`src/main.ts` is the thin entrypoint, `src/cli/` holds the commander program (`cli.ts`) plus one file per command (`generate.ts`, `doctor.ts`, `init.ts`, `config.ts`) and the shared exit handling (`errors.ts`), and `src/runtime/` holds the pipeline (`pipeline.ts`) and its errors (`exceptions.ts`). New commands are registered in `buildProgram()` in `src/cli/cli.ts`. `testpilot config` has only the `list` and `set-azure-openai` subcommands; other settings are edited by hand in `config.json`.
 
 | Command | What it does | Status |
 |---|---|---|
 | `testpilot --help`, `testpilot help <command>`, `testpilot <command> --help` | Usage, from commander | Done |
 | `testpilot doctor` | Checks the setup and prints the fix for each failure (task A) | Done |
 | `testpilot init` | Sets the project up (task A) | Done |
-| `testpilot generate <path.md>` | Generates the script for a test case (below) | Partly done: runs the pipeline, but without flags and still writing to `output/<input's folder>/` |
-| `testpilot --version` | The installed version | To do |
-| `testpilot config list` | Every effective setting, the source it came from, API keys masked | To do |
-| `testpilot config set-azure-openai` | Writes the Azure OpenAI settings (below) | To do |
+| `testpilot generate <path.md>` | Generates the script for a test case (below) | Done; the error codes and hints are task C |
+| `testpilot --version` | The installed version | Done |
+| `testpilot config list` | Every effective setting, the source it came from, API keys masked | Done |
+| `testpilot config set-azure-openai` | Writes the Azure OpenAI settings (below) | Done |
 | `testpilot init --skills=<agents>` | Also installs the skills into the project, e.g. `--skills=copilot,claude` | With task C |
 | `testpilot init --skills=<agents> -g` | Installs the skills into the user's agent folders (e.g. `~/.copilot/skills/`) for every project | Later |
 | `testpilot run <path.spec.ts>` | Runs a generated script with the project's Playwright; see Planned item 1 | Later |
@@ -139,7 +139,9 @@ testpilot config set-azure-openai \
 - Without `--prompt-api-key`, the developer sets `TESTPILOT_AZURE_OPENAI_API_KEY` themselves.
 - `--prompt-api-key` asks for the key with hidden input and writes only `TESTPILOT_AZURE_OPENAI_API_KEY` to a dotenv file: the `--save` path when given, `.env.local` otherwise. The key never goes to `config.json`, and it is never passed as a flag, so it stays out of shell history and agent transcripts.
 - `--save=dotenv[:path]` also writes the other values as `TESTPILOT_` variables to that file (default `.env.local`).
+- Called with none of the four values and without `--prompt-api-key`, it writes nothing and exits with `2`; so does `--prompt-api-key` outside an interactive terminal.
 - Writing a dotenv file adds or updates testpilot's own lines and keeps everything else. Keeping that file out of git is the developer's responsibility.
+- The dotenv file is written before `config.json`. Afterwards the settings are resolved again: a warning on stderr names each variable just written that a stronger source still overrides (e.g. `TESTPILOT_AZURE_OPENAI_ENDPOINT is still taken from .env.local, which overrides .testpilot/config.json`), and a `--save` file other than the project root's `.env` or `.env.local`, which testpilot does not read. No value is printed, and the exit code stays `0`.
 
 **`generate`**
 
@@ -153,27 +155,43 @@ testpilot generate <path.md> \
     --json
 ```
 
-- `--headed` shows the browser the agent drives.
-- `--out`, `--max-turns`, `--locale` and `--log-level` override `scriptsDir`, `maxTurns`, `locale` and `logLevel` for this run.
-- `--json` prints a machine-readable result on stdout: status, spec path, JSON test case path, log path, and on failure the error code, failing stage, failing step and a hint (see task C).
-- The validated JSON goes to `.testpilot/tests/`, the log to `.testpilot/logs/`, the spec to the scripts folder (`scriptsDir`). Today `generate` writes both the JSON and the spec to `output/<input's folder>/` and keeps no log file; `scriptsDir` is already read and validated, but nothing uses it yet. This repo's own `playwright.config.ts` (`testDir: './output'`) needs to follow.
+- `--headed` shows the browser the agent drives. It reaches only the Playwright MCP browser; the validation browser stays headless.
+- `--out`, `--max-turns`, `--locale` and `--log-level` override `scriptsDir`, `maxTurns`, `locale` and `logLevel` for this run, and beat every other settings source. `--out` resolves against the working directory; an invalid value exits with `2` naming the flag (`--max-turns (from flag): ...`).
+- `--json` prints one result object on stdout instead of the three paths, for success and failure alike (see "What task C starts from").
+- The spec goes to the scripts folder (`scriptsDir`), the validated JSON to `.testpilot/tests/` and the log to `.testpilot/logs/`, all named after the input file; the log's name starts with the run's local start time (`<YYYY-MM-DD_HH-MM-SS>-<stem>.log`). On success stdout gets `spec:`, `test case:` and `log:` lines, relative to the working directory. This repo sets `scriptsDir` to `output/testpilot` in its own `.testpilot/config.json`, which `playwright.config.ts` (`testDir: './output'`) covers.
 
 **Built for agents.** Every command:
 
-- never prompts unless it runs in an interactive terminal, so an agent never hangs on a question;
-- exits with `0` on success, `1` when the test case fails to generate, `2` on a setup or config error (already true for `doctor`, `init`, invalid settings and a missing input file; commander's own usage errors, such as an unknown command, still exit with `1`);
-- writes progress to stderr and results to stdout, and always prints the log path;
-- reports progress steadily during long runs (`generate` takes minutes), so it never looks stuck.
+- never prompts unless it runs in an interactive terminal, so an agent never hangs on a question: the only stdin reader is `readHiddenInput` (`src/cli/config.ts`), used by `config set-azure-openai --prompt-api-key`, which refuses to run without a terminal;
+- exits with `0` on success, `1` when the test case fails to generate, `2` on a setup or config error (true for `doctor`, `init`, invalid settings, a missing input file and, in `generate`, a missing or rejected API key (HTTP 401, 403, 404) and a Chromium that cannot launch, see `exitCodeFor` in `src/cli/errors.ts`) and for commander's own usage errors (an unknown command or option, a missing argument); only help and version output exit `0` (`runCli` maps a `CommanderError` to `0` or `2`);
+- writes progress to stderr and results to stdout; `generate` logs the log path as the first and the last line, whatever the log level;
+- reports progress steadily during long runs (`generate` takes minutes), so it never looks stuck: a run-level watchdog in `generate` (`watchProgress`, `src/cli/generate.ts`) checks every 5 seconds when the last line was logged (`lastLineAt`, `src/logger.ts`), and after 30 seconds without one logs `Still working on <stage>, step "<step>" (<n>s)` from the run's progress, `<n>` counting from the last line that was not its own; it repeats every 30 seconds while the quiet lasts.
 
-**Follow-ups from task A's review**, to settle while building task B:
+**What task C starts from.**
 
-- Align the `scriptsDir` default (`tests/testpilot` when unset) with `init`'s fallback (`testpilot`), so a project that never ran `init` still writes where Playwright finds the specs.
-- `config list` should name the source of each value; today an invalid value from `.env`, `.env.local` or the shell is reported without naming its file.
-- The guard that rejects an API key in `config.json` only matches keys named `apiKey` / `api_key`; widen it to names such as `TESTPILOT_AZURE_OPENAI_API_KEY` or `azureOpenAIApiKey` (they are rejected today, but with the generic unknown-key message).
-- `init` reads the first `testDir:` in the config text, comments included; skip comments.
-- `doctor` and `init` only look at the working directory; from a project subfolder they suggest scaffolding a second Playwright project. Walk up to the nearest `package.json`, or say to run from the project root.
-- `doctor` output: indent multi-line error messages, and fit the fix text to the error (e.g. "remove the key from config.json" rather than "fill in config.json").
-- Tests: the rejected-bare-form test prints commander's error into the test output, and the `doctor` command test launches the real Chromium.
+- `generate --json` prints one `GenerateResult` (`src/cli/generate.ts`) and nothing else on stdout:
+
+    ```json
+    {
+      "status": "failure",
+      "exitCode": 1,
+      "spec": null,
+      "testCase": null,
+      "log": "/work/project/.testpilot/logs/2026-11-07_19-02-16-test_login.log",
+      "error": {
+        "code": null,
+        "type": "ExtractorError",
+        "stage": "extract",
+        "step": "Verify the welcome message",
+        "message": "..."
+      }
+    }
+    ```
+
+    `status` is `success` or `failure`. `spec`, `testCase` and `log` are absolute paths, `null` when not written (`log` is `null` if the run failed before the log opened); on success `error` is `null`. `error.type` is the error's class name (`ConfigurationError`, `UsageError`, `StructurerError`, `McpError`, `ExtractorError`, `ValidatorError`, `GeneratorError`, or an LLM client's, e.g. `APIError`). A Chromium that cannot launch reports `McpError` (exit code `2`), with a `BrowserLaunchError` as its `cause`, because the Playwright MCP browser launches first. `stage` is `structure`, `extract`, `validate` or `generate` (`null` before the first), and `step` is the step being extracted or whose replay failed (`null` if none). **`error.code` is reserved and always `null`: task C assigns the stable codes, and adds a hint.** The object is printed for every failure after the arguments parse, a missing input file and an invalid configuration included.
+- Exit codes: `0` success, `1` the test case failed to generate, `2` a setup, usage or configuration error. `exitCodeFor` (`src/cli/errors.ts`) classifies a failure as `2` when it, or anything in its `cause` chain, is a `ConfigurationError`, a `BrowserLaunchError` or carries an HTTP status of 401, 403 or 404 (a wrong key, no access, a wrong endpoint or deployment); every other pipeline failure is `1`. A missing input file and commander's own usage errors are `2` too.
+- Outputs: the spec in `scriptsDir`, the JSON in `.testpilot/tests/`, the log in `.testpilot/logs/` (its first and last line is `Log: <path>`), Playwright MCP's own output in `.testpilot/.playwright-mcp/` under the project root. Progress and logs are on stderr, results on stdout.
+- VS Code Copilot runs the agent's commands in a real integrated terminal (`isTTY` is true), so the TTY check cannot stop it: the skill must never run `config set-azure-openai --prompt-api-key` itself, but ask the developer to run it.
 
 ### C. Skills
 
