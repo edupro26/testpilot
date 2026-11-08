@@ -60,7 +60,7 @@ test('a Chromium that does not launch fails with the install command', async () 
         Promise.reject(new Error("Executable doesn't exist")),
     );
     expect(check.status).toBe('fail');
-    expect(check.fix).toMatch(/npx playwright install chromium/);
+    expect(check.fix).toMatch(/npx playwright install$/);
 });
 
 test("the project's Playwright: missing fails, older warns, same passes", async () => {

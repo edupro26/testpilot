@@ -68,7 +68,7 @@ export async function checkChromium(launch: () => Promise<void>): Promise<Check>
             name: 'Chromium',
             status: 'fail',
             detail: errorMessage(error).split('\n')[0] ?? '',
-            fix: `cd ${TESTPILOT_ROOT} && npx playwright install chromium`,
+            fix: `cd ${TESTPILOT_ROOT} && npx playwright install`,
         };
     }
 }

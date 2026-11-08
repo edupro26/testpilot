@@ -20,9 +20,10 @@ An LLM agent performs each step of the test case in a real browser through [Play
 git clone https://github.com/edupro26/testpilot.git
 cd testpilot
 npm ci && npm link
+npx playwright install
 ```
 
-`npm ci` installs the dependencies and the Chromium build testpilot drives while generating; `npm link` puts the `testpilot` command on your PATH. To update later: `git pull && npm ci`.
+`npm ci` installs the dependencies, `npm link` puts the `testpilot` command on your PATH, and `npx playwright install` downloads the browsers testpilot's Playwright drives (it must run inside the testpilot folder, so the builds match testpilot's own Playwright). To update later: `git pull && npm ci && npx playwright install`.
 
 **Once per project**, inside the webapp project you want tests for:
 

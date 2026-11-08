@@ -20,9 +20,10 @@ Comes before every other item. The goal is to let an agent such as GitHub Copilo
 git clone https://github.com/edupro26/testpilot.git
 cd testpilot
 npm ci && npm link
+npx playwright install
 ```
 
-`npm ci` installs the dependencies, and a `postinstall` script (`playwright install chromium`) downloads the Chromium build testpilot's own Playwright uses; it is a no-op when that build is already there. `npm link` puts the `testpilot` command on the PATH.
+`npm ci` installs the dependencies and `npm link` puts the `testpilot` command on the PATH. `npx playwright install`, run inside the clone, downloads the browser builds testpilot's own Playwright uses (Chromium, Firefox and WebKit; testpilot drives Chromium today); it is a no-op when they are already there. There is no `postinstall` script: npm gates install scripts of globally installed packages (it warns today and may skip them later), so the browser install is an explicit step.
 
 **Once per project**, inside the webapp project:
 
@@ -120,7 +121,7 @@ Out of scope for now: publishing testpilot to a package registry. That needs a b
 | `testpilot init --skills=<agents>` | Also installs the skills into the project, e.g. `--skills=copilot,claude` | With task C |
 | `testpilot init --skills=<agents> -g` | Installs the skills into the user's agent folders (e.g. `~/.copilot/skills/`) for every project | Later |
 | `testpilot run <path.spec.ts>` | Runs a generated script with the project's Playwright; see Planned item 1 | Later |
-| `testpilot update` | `git pull && npm ci` in the clone, then re-checks testpilot's Chromium | Later |
+| `testpilot update` | `git pull && npm ci && npx playwright install` in the clone, then re-checks testpilot's Chromium | Later |
 | `testpilot logs [run]` | Lists recent generate runs, or prints one run's log (the latest by default) | Later |
 
 **`config set-azure-openai`**

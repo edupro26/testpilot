@@ -44,7 +44,8 @@ playwright.config.ts                # runs the generated specs in output/testpil
 ## Dev workflow
 
 ```
-npm ci                               # install dependencies + testpilot's Chromium (postinstall)
+npm ci                               # install dependencies
+npx playwright install               # browsers for testpilot's Playwright (once, and after a Playwright upgrade)
 npm run typecheck                    # type-check (tsc)
 npm run lint                         # lint (ESLint, type-aware)
 npm run format                       # format (Prettier)
