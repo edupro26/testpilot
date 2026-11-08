@@ -165,7 +165,11 @@ export function checkLlmSettings(env: NodeJS.ProcessEnv, cwd: string): Check {
         return {
             name: 'LLM settings',
             status: 'fail',
-            detail: error.message,
+            // Without a source, the error lists the missing variables by name.
+            detail:
+                error.source === undefined
+                    ? 'Missing required configuration variables'
+                    : error.message,
             fix: llmSettingsFix(error),
         };
     }
@@ -182,9 +186,8 @@ function llmSettingsFix(error: ConfigurationError): string {
     switch (error.source) {
         case undefined:
             return (
-                'Run testpilot config set-azure-openai with your Azure OpenAI ' +
-                'settings, then testpilot config set-azure-openai --prompt-api-key ' +
-                'in your own terminal'
+                'Run `testpilot config set-azure-openai` to set your Azure OpenAI ' +
+                'settings; add `--prompt-api-key` to enter the API key'
             );
         case 'config.json':
             return 'Fix .testpilot/config.json';

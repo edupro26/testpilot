@@ -75,15 +75,12 @@ export async function initCommand(
 
     const scriptsDir = await scriptsDirFor(cwd);
     await mkdir(path.join(cwd, CONFIG_DIR), { recursive: true });
-    print('');
-    print(`${await writeGitignore(cwd)} ${toPosix(GITIGNORE_FILE)}`);
-    const [status, note = ''] = await writeConfig(cwd, scriptsDir);
-    print(`${status} ${toPosix(CONFIG_FILE)}${note}`);
-    if (failed.length > 0) {
-        print(
-            '\nNext: run `testpilot config set-azure-openai` to set your Azure OpenAI ' +
-                'settings; add `--prompt-api-key` to enter the API key.',
-        );
+    const lines = [
+        await writeGitignore(cwd),
+        await writeConfig(cwd, scriptsDir),
+    ].filter((line) => line !== undefined);
+    if (lines.length > 0) {
+        print(['', ...lines].join('\n'));
     }
 }
 
@@ -107,39 +104,43 @@ async function scriptsDirFor(cwd: string): Promise<string> {
     return path.posix.join(toPosix(testDir ?? '.'), 'testpilot');
 }
 
-/** Write the `.gitignore` unless there is one. */
-async function writeGitignore(cwd: string): Promise<string> {
+/**
+ * Write the `.gitignore` unless there is one.
+ *
+ * @returns The line to print, if the file was created.
+ */
+async function writeGitignore(cwd: string): Promise<string | undefined> {
     const file = path.join(cwd, GITIGNORE_FILE);
     if (existsSync(file)) {
-        return 'kept';
+        return undefined;
     }
     await writeFile(file, GITIGNORE, 'utf8');
-    return 'created';
+    return `created ${toPosix(GITIGNORE_FILE)}`;
 }
 
 /**
  * Write `scriptsDir` into the config, keeping every other key and any value
  * already set.
  *
- * @returns What happened to the file, and a note to print after its name.
+ * @returns The line to print, if the file was created or changed, or cannot be
+ *   read and needs fixing by hand.
  */
 async function writeConfig(
     cwd: string,
     scriptsDir: string,
-): Promise<[status: string, note?: string]> {
+): Promise<string | undefined> {
     const file = path.join(cwd, CONFIG_FILE);
     let existing: ConfigFile | undefined;
     try {
         existing = await readConfigObject(file);
     } catch (error) {
         if (error instanceof ConfigurationError) {
-            const reason = error.message.slice(`${toPosix(CONFIG_FILE)}: `.length);
-            return ['kept', ` (${reason}; fix it by hand)`];
+            return `! ${error.message}; fix it by hand`;
         }
         throw error;
     }
     if (existing?.scriptsDir !== undefined) {
-        return ['kept'];
+        return undefined;
     }
     const config = existing ?? {};
     const status = existsSync(file) ? 'updated' : 'created';
@@ -148,7 +149,7 @@ async function writeConfig(
         `${JSON.stringify({ ...config, scriptsDir }, null, 4)}\n`,
         'utf8',
     );
-    return [status];
+    return `${status} ${toPosix(CONFIG_FILE)}`;
 }
 
 function toPosix(file: string): string {

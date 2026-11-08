@@ -123,7 +123,7 @@ test('LLM settings: configured Azure passes, unconfigured fails naming what is m
 
     const check = checkLlmSettings({}, root);
     expect(check.status).toBe('fail');
-    expect(check.detail).toMatch(/TESTPILOT_AZURE_OPENAI_ENDPOINT/);
+    expect(check.detail).toBe('Missing required configuration variables');
     expect(check.fix).toMatch(/testpilot config set-azure-openai/);
 });
 

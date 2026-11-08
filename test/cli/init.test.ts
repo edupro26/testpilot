@@ -97,12 +97,13 @@ test('re-running init keeps an edited config', async () => {
     await initCommand({ cwd, checks: checks() });
     const edited = '{\n  "scriptsDir": "custom",\n  "maxTurns": 7\n}\n';
     await writeFile(path.join(cwd, '.testpilot', 'config.json'), edited);
+    stdout.mockClear();
 
     await initCommand({ cwd, checks: checks() });
 
     expect(await readConfig(cwd)).toBe(edited);
-    expect(printed()).toContain('kept .testpilot/config.json');
-    expect(printed()).toContain('kept .testpilot/.gitignore');
+    expect(printed()).not.toContain('.testpilot/config.json');
+    expect(printed()).not.toContain('.testpilot/.gitignore');
 });
 
 test('an existing config without scriptsDir gets it added', async () => {
@@ -134,7 +135,9 @@ test('a config that is not valid JSON is left for the developer to fix', async (
     await initCommand({ cwd, checks: checks('LLM settings') });
 
     expect(await readConfig(cwd)).toBe('{ not json');
-    expect(printed()).toMatch(/kept \.testpilot\/config\.json.*not valid JSON/);
+    expect(printed()).toMatch(
+        /! \.testpilot\/config\.json: .*not valid JSON.*fix it by hand/,
+    );
 });
 
 test('a config that is JSON but not an object is left as is, not crashed on', async () => {
@@ -146,7 +149,9 @@ test('a config that is JSON but not an object is left as is, not crashed on', as
         await initCommand({ cwd, checks: checks('LLM settings') });
 
         expect(await readConfig(cwd)).toBe(text);
-        expect(printed()).toMatch(/kept \.testpilot\/config\.json.*not a JSON object/);
+        expect(printed()).toContain(
+            '! .testpilot/config.json: not a JSON object; fix it by hand',
+        );
     }
 });
 
@@ -167,10 +172,7 @@ test('missing LLM settings do not stop init', async () => {
     await initCommand({ cwd, checks: checks('LLM settings') });
 
     expect(existsSync(path.join(cwd, '.testpilot', 'config.json'))).toBe(true);
-    expect(printed()).toContain(
-        'Next: run `testpilot config set-azure-openai` to set your Azure OpenAI ' +
-            'settings; add `--prompt-api-key` to enter the API key.',
-    );
+    expect(printed()).not.toContain('Next:');
 });
 
 test('without a literal testDir the scripts go to testpilot/', async () => {
