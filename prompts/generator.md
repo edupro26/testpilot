@@ -1,94 +1,119 @@
-Write a complete, runnable pytest-playwright test module for the test case
-below. Its browser steps have already been worked out and validated against
-a live page: your job is to assemble them into a clean Python file.
+Write a complete, runnable Playwright Test (`@playwright/test`) spec file for
+the test case below. Its browser steps have already been worked out and
+validated against a live page: your job is to assemble them into a clean
+TypeScript file.
 
 TEST CASE NAME
-{test_case_name}
+{{test_case_name}}
 
-FIXTURE (copy into the file exactly as given)
-{fixture}
+LOCALE SETTING (copy into the file exactly as given)
+{{locale_setting}}
+
+TIMEOUT SETTING (copy into the test body exactly as given, unless it says
+"(none)")
+{{timeout_setting}}
 
 STEPS AND THEIR VALIDATED STATEMENTS
-Each block is one step of the test case: the step's text, then the Python
-statements that perform it, in order.
+Each block is one step of the test case: the step's text, then the
+TypeScript statements that perform it, in order. A statement followed by
+`[timeout: <ms>]` is an assertion whose content takes longer than usual to
+appear: the marker is not part of its code.
 
-{steps}
+{{steps}}
 
 WHAT THE FILE MUST CONTAIN, IN THIS ORDER
-1. A module docstring: a short title line saying what the test verifies,
-    then a blank line and one or two sentences of context.
-2. The imports, and nothing else at the top. Import exactly what the file
-    uses: `pytest` (for the fixture), `Page` (for the test's signature),
-    `expect` if any statement uses it, and any other name a statement
-    references. Import nothing that is not used.
-3. The fixture, exactly as given above.
-4. ONE test function:
-    - Signature: `def <name>(page: Page) -> None:`.
-    - Name: starts with `test_`, then lowercase snake_case describing the
-        test (letters, digits, underscores only), at most 60 characters.
-    - A one-sentence docstring describing what the test does.
-    - The body: for every step, in the given order, a comment `# <step text>`
-        followed by that step's statements, one per line. Leave one blank
-        line between steps. For a step with no statements, write the step
-        comment followed by `# (no browser interaction required)`.
+1. A file header comment: a `/** ... */` block with a short title line
+    saying what the test verifies, then a blank comment line and one or two
+    sentences of context.
+2. The import, and nothing else at the top. Import exactly what the file
+    uses from `@playwright/test`: `test`, and `expect` if any statement uses
+    it. Import nothing that is not used.
+3. The locale setting, exactly as given above.
+4. ONE test:
+    - Directly above it, a one-sentence `/** ... */` comment describing
+        what the test does.
+    - Form: `test('<title>', async ({ page }) => { ... });`.
+    - Title: a short, plain-English description of the test, at most 60
+        characters, starting with a capital letter and with no trailing
+        period.
+    - The body: if a timeout setting is given, first that line on its own,
+        then a blank line. Then, for every step, in the given order, a
+        comment `// <step text>` followed by that step's statements, one per
+        line. Leave one blank line between steps. For a step with no
+        statements, write the step comment followed by
+        `// (no browser interaction required)`.
 
 RULES FOR THE STATEMENTS
 - Copy every statement character for character. Do not edit, reformat,
     rename, reorder, merge, split or wrap them, and do not add or remove any.
     They are the validated part of the test; the file is rejected if one is
     missing or changed.
-- Do not add any other code: no waits, retries, try/except, prints, helper
-    functions, variables, assertions or setup.
+- The one change you make: for a statement marked `[timeout: <ms>]`, drop
+    the marker and give its matcher (the call after `expect(...)`, such as
+    `.toBeVisible()`) the option `timeout: <ms>`, with the value as given.
+    If the matcher has no options object, add `{ timeout: <ms> }` as its
+    last argument; if it already has one, add `timeout: <ms>` as that
+    object's last property. Leave the rest of the statement untouched, and
+    give no other statement a timeout.
+- Do not add any other code: no waits, retries, try/catch, console logs,
+    helper functions, variables, assertions or setup.
 
 STYLE
-- Four-space indentation and double quotes, as in the statements.
-- Keep every line you write within 88 characters; wrap long docstring
+- Two-space indentation, single quotes and semicolons, as in the statements.
+- Keep every line you write within 88 characters; wrap long comment
     sentences onto the next line. (Statements stay as given, whatever their
     length.)
-- Two blank lines between the imports, the fixture and the test function.
-- No comments other than the step comments.
+- One blank line between the header comment, the import, the locale setting
+    and the test.
+- No comments other than the header, the test's comment and the step
+    comments.
 
 EXAMPLE
-For a test case "Login with valid credentials", a fixture for "en-US" and
-the steps:
+For a test case "Login with valid credentials", the locale setting
+`test.use({ locale: 'en-US' });`, the timeout setting
+`test.setTimeout(60_000);` and the steps:
 
 STEP: Open the login page
-page.goto("https://example.com/login")
+await page.goto('https://example.com/login');
 
 STEP: Check the page is shown
 (no statements)
 
 STEP: Verify the welcome message is visible
-expect(page.get_by_text("Welcome back")).to_be_visible()
+await expect(page.getByText('Welcome back')).toBeVisible();
+
+STEP: Verify the dashboard has loaded
+await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();  [timeout: 20_000]
 
 the file is:
 
-"""Login with valid credentials.
+/**
+ * Login with valid credentials.
+ *
+ * Opens the login page and checks the welcome message is shown.
+ */
 
-Opens the login page and checks the welcome message is shown.
-"""
+import { expect, test } from '@playwright/test';
 
-import pytest
-from playwright.sync_api import Page, expect
+test.use({ locale: 'en-US' });
 
+/** Open the login page and verify the welcome message is visible. */
+test('Login with valid credentials', async ({ page }) => {
+  test.setTimeout(60_000);
 
-@pytest.fixture(scope="session")
-def browser_context_args(browser_context_args: dict) -> dict:
-    """Pin the locale these locators were validated under."""
-    return {{**browser_context_args, "locale": "en-US"}}
+  // Open the login page
+  await page.goto('https://example.com/login');
 
+  // Check the page is shown
+  // (no browser interaction required)
 
-def test_login_with_valid_credentials(page: Page) -> None:
-    """Open the login page and verify the welcome message is visible."""
-    # Open the login page
-    page.goto("https://example.com/login")
+  // Verify the welcome message is visible
+  await expect(page.getByText('Welcome back')).toBeVisible();
 
-    # Check the page is shown
-    # (no browser interaction required)
-
-    # Verify the welcome message is visible
-    expect(page.get_by_text("Welcome back")).to_be_visible()
+  // Verify the dashboard has loaded
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible({ timeout: 20_000 });
+});
 
 OUTPUT
-Return ONLY the Python source of the file: no Markdown code fences, no
+Return ONLY the TypeScript source of the file: no Markdown code fences, no
 explanation before or after it.
