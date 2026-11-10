@@ -1,6 +1,6 @@
 /** `testpilot generate`: turn a markdown test case into a Playwright script. */
 
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { CONFIG_DIR, findProjectRoot, type SettingFlags } from '../config.ts';
@@ -64,6 +64,109 @@ async function createLogFile(root: string, stem: string, now: Date): Promise<str
                 throw error;
             }
         }
+    }
+}
+
+// How long a lock file that records no holder may be one being written, rather
+// than one left behind by a run that stopped before it wrote it.
+const LOCK_WRITE_MS = 5_000;
+
+/** Who holds a reservation of a test case's outputs, as its lock file records it. */
+interface OutputHolder {
+    /** The holding run's process. */
+    pid: number;
+    /** The input it is generating, as the outputs' JSON records it. */
+    source: string;
+}
+
+/**
+ * Reserve a test case's outputs for this run, until the reservation is
+ * disposed: another run, of this input or another with the same name, cannot
+ * write them in the meantime.
+ *
+ * The reservation is a lock file next to the JSON, `<stem>.json.lock`, which
+ * records the run's process and input. One left behind by a run that no longer
+ * exists is taken over.
+ *
+ * @param paths - The outputs.
+ * @param source - The input, as the outputs' JSON records it.
+ * @returns The reservation; dispose of it once both outputs are written.
+ * @throws {OutputConflictError} If another run that is still going holds them.
+ * @throws {NodeJS.ErrnoException} What kept the lock file from being created.
+ */
+async function reserveOutputs(
+    paths: OutputPaths,
+    source: string,
+): Promise<AsyncDisposable> {
+    const lock = `${paths.testCase}.lock`;
+    const holder: OutputHolder = { pid: process.pid, source };
+    await mkdir(path.dirname(lock), { recursive: true });
+    for (;;) {
+        try {
+            await writeFile(lock, JSON.stringify(holder), { flag: 'wx' });
+            return { [Symbol.asyncDispose]: () => unlink(lock).catch(() => undefined) };
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+                throw error;
+            }
+        }
+        const other = await lockHolder(lock);
+        if (other !== 'stale') {
+            const by =
+                other === undefined
+                    ? 'another run'
+                    : `${other.source} by another run (process ${other.pid})`;
+            throw new OutputConflictError(
+                `${shown(paths.testCase)} is being generated from ${by}; generating ` +
+                    `${source} now would overwrite it and its script. If no other ` +
+                    `run is going, delete ${shown(lock)}`,
+            );
+        }
+        await unlink(lock).catch(() => undefined);
+    }
+}
+
+/**
+ * The run holding a lock file.
+ *
+ * @param lock - The lock file.
+ * @returns Its holder, if it is still running; `undefined` if the lock records
+ *   none but may be being written; `'stale'` if it is gone, its holder has
+ *   stopped, or it was left unwritten.
+ */
+async function lockHolder(lock: string): Promise<OutputHolder | 'stale' | undefined> {
+    let text: string;
+    let modified: number;
+    try {
+        [text, { mtimeMs: modified }] = await Promise.all([
+            readFile(lock, 'utf8'),
+            stat(lock),
+        ]);
+    } catch {
+        return 'stale';
+    }
+    let recorded: Partial<OutputHolder> = {};
+    try {
+        recorded = JSON.parse(text) as Partial<OutputHolder>;
+    } catch {
+        // Not written yet, or written in part.
+    }
+    if (typeof recorded.pid !== 'number' || typeof recorded.source !== 'string') {
+        return Date.now() - modified < LOCK_WRITE_MS ? undefined : 'stale';
+    }
+    return isRunning(recorded.pid)
+        ? { pid: recorded.pid, source: recorded.source }
+        : 'stale';
+}
+
+/** Whether the process `pid` exists. */
+function isRunning(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        // EPERM: it exists, under another user.
+        return (error as NodeJS.ErrnoException).code === 'EPERM';
     }
 }
 
@@ -252,7 +355,8 @@ function shown(file: string): string {
  *   directory.
  * @param options - The command's flags; each overrides its setting for this run.
  * @throws {CliExit} With status 2 if the file is missing, the configuration
- *   is invalid, the outputs belong to another input with the same name, or a
+ *   is invalid, the outputs belong to another input with the same name or
+ *   another run is generating them, or a
  *   setup problem (see `exitCodeFor`) stops the run, or 1 if a pipeline stage
  *   fails.
  */
@@ -308,6 +412,17 @@ async function generate(
     const settings = loadSettingsOrFail(settingFlags(options));
     const paths = outputPaths(input, root, settings.scriptsDir);
     const source = path.relative(root, input).split(path.sep).join(path.posix.sep);
+    // Held until both outputs are written, so that no run of another input with
+    // the same name passes the check below and writes them in the meantime.
+    await using reservation = await reserveOutputs(paths, source).catch(
+        (error: unknown) => {
+            const message =
+                error instanceof OutputConflictError
+                    ? error.message
+                    : `Cannot reserve ${shown(paths.testCase)}: ${errorMessage(error)}`;
+            failWithCode(message, error);
+        },
+    );
     const owner = await outputSource(paths);
     if (owner !== undefined && owner !== source) {
         const message =

@@ -174,6 +174,16 @@ describe('rejects a script that is not exactly what was validated', () => {
             match: ASSERT_MARKED,
         },
         {
+            // Removing it restores the statement, but the matcher keeps its
+            // default wait.
+            id: 'timeout-in-locator',
+            reply: script(
+                'en-US',
+                steps(ASSERT.replace("'Login' }", "'Login', timeout: 18_000 }")),
+            ),
+            match: ASSERT_MARKED,
+        },
+        {
             id: 'unmeasured-timeout',
             reply: script(
                 'en-US',

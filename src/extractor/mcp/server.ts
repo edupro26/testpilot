@@ -329,17 +329,33 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
 /**
  * Create a server and connect a client to it in memory.
  *
+ * A session that fails to connect is closed, server and browser included,
+ * before the error is thrown: nothing else holds it to close it later.
+ *
  * @throws {McpError} If either side fails to start.
  */
 async function openSession(createServer: ServerFactory): Promise<Session> {
+    let session: Session | undefined;
     try {
         const server = await createServer();
         const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-        const client = new Client({ name: 'testpilot', version: '0.1.0' });
+        session = {
+            client: new Client({ name: 'testpilot', version: '0.1.0' }),
+            server,
+        };
         await server.connect(serverTransport);
-        await client.connect(clientTransport, { timeout: CONNECT_TIMEOUT_MS });
-        return { client, server };
+        await session.client.connect(clientTransport, { timeout: CONNECT_TIMEOUT_MS });
+        return session;
     } catch (error) {
+        if (session !== undefined) {
+            // The connection's failure is the error to report, not the close's.
+            await closeSession(session).catch((closeError: unknown) => {
+                logger.warning(
+                    `Could not close the failed Playwright MCP session: ` +
+                        errorMessage(closeError),
+                );
+            });
+        }
         throw new McpError(`Could not start Playwright MCP: ${errorMessage(error)}`, {
             code: 'BROWSER_AGENT_FAILED',
             cause: error,
@@ -347,9 +363,13 @@ async function openSession(createServer: ServerFactory): Promise<Session> {
     }
 }
 
+/** Close the client, then the server and its browser, even if the client fails to. */
 async function closeSession({ client, server }: Session): Promise<void> {
-    await client.close();
-    await server.close();
+    try {
+        await client.close();
+    } finally {
+        await server.close();
+    }
 }
 
 /**

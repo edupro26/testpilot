@@ -126,8 +126,8 @@ command in their own terminal. `configuration.md` has the details.
 Turns one markdown test case into a Playwright script. It writes the script to the
 scripts folder (`scriptsDir`), the validated test case JSON to `.testpilot/tests/`,
 and a log of the run to `.testpilot/logs/`, all named after the input file. It
-refuses to overwrite the outputs of another input with the same file name
-(`OUTPUT_CONFLICT`).
+refuses to overwrite the outputs of another input with the same file name, or those
+another run is generating (`OUTPUT_CONFLICT`).
 
 Always run it as `testpilot generate <path.md> --json`: `--json` prints the result as
 one JSON object on stdout, for a success and a failure alike, which you read once the

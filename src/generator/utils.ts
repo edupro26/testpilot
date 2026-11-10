@@ -145,10 +145,38 @@ function writes(line: string, statement: StepStatement): boolean {
             const ms = Number(match[1]?.replaceAll('_', ''));
             const rest =
                 line.slice(0, match.index) + line.slice(match.index + match[0].length);
-            return ms === statement.timeout && rest === code;
+            return (
+                ms === statement.timeout &&
+                rest === code &&
+                match.index >= (argumentsStart(line) ?? Infinity)
+            );
         }
     }
     return false;
+}
+
+/**
+ * Where the arguments of a statement's outermost call begin: past
+ * `.toBeVisible` in `await expect(locator).toBeVisible()`, so an option found
+ * from there on is the matcher's (or the action's) and not the locator's.
+ *
+ * @param line - A statement, trimmed.
+ * @returns The offset in `line`; `undefined` when it is not a call.
+ */
+function argumentsStart(line: string): number | undefined {
+    const source = ts.createSourceFile('statement.ts', line, ts.ScriptTarget.Latest);
+    const [first] = source.statements;
+    if (first === undefined || !ts.isExpressionStatement(first)) {
+        return undefined;
+    }
+    let expression = first.expression;
+    while (
+        ts.isAwaitExpression(expression) ||
+        ts.isParenthesizedExpression(expression)
+    ) {
+        expression = expression.expression;
+    }
+    return ts.isCallExpression(expression) ? expression.expression.end : undefined;
 }
 
 /** Milliseconds with `_` thousands separators, as Playwright code writes them. */

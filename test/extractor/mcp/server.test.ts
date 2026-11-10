@@ -3,6 +3,7 @@
 import path from 'node:path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { BrowserContext } from '@playwright/test';
 import { describe, expect, test } from 'vitest';
 
@@ -13,6 +14,7 @@ import {
 import {
     mcpConfig,
     McpResult,
+    type McpServer as McpServerSide,
     PlaywrightMCP,
     playwrightServer,
     type ServerFactory,
@@ -131,6 +133,40 @@ describe('PlaywrightMCP', () => {
         expect(String(error)).toMatch(
             /missing expected tool\(s\): browser_verify_value/,
         );
+    });
+
+    test.each([
+        {
+            id: 'the server fails to connect',
+            connect: () => Promise.reject(new Error('cannot attach')),
+        },
+        {
+            id: 'the client fails to connect',
+            // The server hangs up before the client's handshake.
+            connect: async (transport: Transport) => {
+                await transport.start();
+                await transport.close();
+            },
+        },
+    ])('a session that fails to connect is closed: $id', async ({ connect }) => {
+        // The server owns a launched browser, and no PlaywrightMCP is returned
+        // to close it later.
+        let closed = 0;
+        const server: McpServerSide = {
+            connect,
+            close: () => {
+                closed++;
+                return Promise.resolve();
+            },
+        };
+
+        const error = await PlaywrightMCP.connect(() => Promise.resolve(server)).catch(
+            (e: unknown) => e,
+        );
+
+        expect(error).toBeInstanceOf(McpError);
+        expect(String(error)).toMatch(/Could not start Playwright MCP/);
+        expect(closed).toBe(1);
     });
 
     test("runs statements on the session's newest page, a new session's after a reset", async () => {

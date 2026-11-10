@@ -1,5 +1,6 @@
 /** Tests for the generate command: the pipeline's wiring, run offline. */
 
+import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -301,6 +302,57 @@ test('Smoke test', async ({ page }) => {
         });
         expect(await readFile(json, 'utf8')).toBe(before);
         expect(await readdir('.testpilot/logs')).toHaveLength(1);
+    });
+
+    test('an input named like one being generated is refused while it runs', async () => {
+        // Both would pass the JSON's check before either wrote it, then share
+        // its outputs; the run holding them keeps them until both are written.
+        let release = (): void => undefined;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        let extracting = (): void => undefined;
+        const started = new Promise<void>((resolve) => (extracting = resolve));
+        const first = runPipeline(SMOKE_SCRIPT, ['--json'], () => {
+            const extract = fakes.runStep;
+            fakes.runStep = async (...args) => {
+                extracting();
+                await gate;
+                return (await extract?.(...args)) ?? [];
+            };
+        });
+        await started;
+        await mkdir('other');
+        await writeFile(path.join('other', 'case.md'), '# Another test');
+        const json = path.join('.testpilot', 'tests', 'case.json');
+
+        expect(await runCli(['generate', 'other/case.md', '--json'])).toBe(2);
+        expect(stderr()).toContain(
+            `OUTPUT_CONFLICT: ${json} is being generated from automation/case.md ` +
+                `by another run (process ${process.pid}); generating other/case.md ` +
+                'now would overwrite it and its script',
+        );
+
+        release();
+        expect((await first)[0]).toBe(0);
+        expect(JSON.parse(await readFile(json, 'utf8'))).toMatchObject({
+            source: 'automation/case.md',
+        });
+        expect(existsSync(`${json}.lock`)).toBe(false);
+    });
+
+    test('a reservation left by a run that stopped is taken over', async () => {
+        const tests = path.join('.testpilot', 'tests');
+        await mkdir(tests, { recursive: true });
+        const { pid } = spawnSync(process.execPath, ['-e', '']);
+        const lock = path.join(tests, 'case.json.lock');
+        await writeFile(lock, JSON.stringify({ pid, source: 'other/case.md' }));
+
+        expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
+        expect(existsSync(lock)).toBe(false);
+
+        // A failed run releases its reservation too.
+        fakePipeline('not a script');
+        expect(await runCli(['generate', 'automation/case.md'])).toBe(1);
+        expect(existsSync(lock)).toBe(false);
     });
 
     test('the same input, or JSON that records no source, is overwritten', async () => {

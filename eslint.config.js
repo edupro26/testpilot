@@ -54,10 +54,15 @@ export default defineConfig(
                 // Object keys mirror wire formats (JSON contract, OpenAI, MCP).
                 { selector: ['objectLiteralProperty', 'typeProperty'], format: null },
             ],
-            // A leading underscore marks a deliberately unused binding.
+            // A leading underscore marks a deliberately unused binding; a `using`
+            // declaration is held for its disposal alone.
             '@typescript-eslint/no-unused-vars': [
                 'error',
-                { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+                {
+                    argsIgnorePattern: '^_',
+                    varsIgnorePattern: '^_',
+                    ignoreUsingDeclarations: true,
+                },
             ],
             '@typescript-eslint/restrict-template-expressions': [
                 'error',
