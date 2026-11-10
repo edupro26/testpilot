@@ -4,13 +4,13 @@ What is planned next for the application. The current design is described in [AP
 
 ## Priority: Copilot agent integration with skills
 
-Comes before every other item. The goal is to let an agent such as GitHub Copilot in VS Code drive testpilot from inside a developer's own webapp project: testpilot is installed once per machine, set up once per project, and the agent learns how to use it from skills. The three tasks are worked on in any order.
+Comes before every other item. The goal is to let an agent such as GitHub Copilot in VS Code drive testpilot from inside a developer's own webapp project: testpilot is installed once per machine, set up once per project, and the agent learns how to use it from skills. The three tasks are done, so this section has no planned work left (one known gap is noted under C, "Still open"); the items under Planned come next.
 
 | # | Task | Description | Status |
 |---|---|---|---|
 | A | Installation and project setup | Go from `git clone` to a `testpilot` command on the PATH, and set a project up with `testpilot init`. Detailed below. | Done |
 | B | CLI commands | Design and build every command and flag the agent needs. Detailed below. | Done |
-| C | Skills | Write the skill that teaches an agent how to use testpilot, installed by `testpilot init --skills`. Detailed below. | Planned |
+| C | Skills | Write the skill that teaches an agent how to use testpilot, installed by `testpilot init --skills`, with stable error codes and hints. Detailed below. | Done |
 
 ### A. Installation and project setup (done)
 
@@ -62,7 +62,7 @@ Every other setting keeps its default until it is set, and the Azure block comes
 
 Without a string-literal `testDir` in the Playwright config, `scriptsDir` falls back to `testpilot` (Playwright's default `testDir` is the config's own folder), with a warning when `testDir` is set some other way.
 
-Re-running `init` is safe: it never overwrites an existing file, and only adds `scriptsDir` to a `config.json` that lacks it; a `config.json` that is not a valid JSON object is left untouched for the developer to fix. That is also how `init --skills` (task C) adds or updates the skills in a project already set up.
+Re-running `init` is safe: it never overwrites an existing file, and only adds `scriptsDir` to a `config.json` that lacks it; a `config.json` that is not a valid JSON object is left untouched for the developer to fix. That is also how `init --skills` adds or updates the skill in a project already set up; the skill folder is the one exception to never overwriting: `init --skills` replaces it whole, hand edits included.
 
 #### Settings
 
@@ -114,12 +114,12 @@ Out of scope for now: publishing testpilot to a package registry. That needs a b
 | `testpilot --help`, `testpilot help <command>`, `testpilot <command> --help` | Usage, from commander | Done |
 | `testpilot doctor` | Checks the setup and prints the fix for each failure (task A) | Done |
 | `testpilot init` | Sets the project up (task A) | Done |
-| `testpilot generate <path.md>` | Generates the script for a test case (below) | Done; the error codes and hints are task C |
+| `testpilot generate <path.md>` | Generates the script for a test case (below) | Done |
 | `testpilot --version` | The installed version | Done |
 | `testpilot config list` | Every effective setting, the source it came from, API keys masked | Done |
 | `testpilot config set-azure-openai` | Writes the Azure OpenAI settings (below) | Done |
-| `testpilot init --skills=<agents>` | Also installs the skills into the project, e.g. `--skills=copilot,claude` | With task C |
-| `testpilot init --skills=<agents> -g` | Installs the skills into the user's agent folders (e.g. `~/.copilot/skills/`) for every project | Later |
+| `testpilot init --skills[=<agent>]` | Also installs the skill into the project (task C) | Done |
+| `testpilot init --skills[=<agent>] -g` | Installs the skill into the user's agent folder (e.g. `~/.copilot/skills/`) for every project (task C) | Done |
 | `testpilot run <path.spec.ts>` | Runs a generated script with the project's Playwright; see Planned item 1 | Later |
 | `testpilot update` | `git pull && npm ci && npx playwright install` in the clone, then re-checks testpilot's Chromium | Later |
 | `testpilot logs [run]` | Lists recent generate runs, or prints one run's log (the latest by default) | Later |
@@ -158,7 +158,7 @@ testpilot generate <path.md> \
 
 - `--headed` shows the browser the agent drives. It reaches only the Playwright MCP browser; the validation browser stays headless.
 - `--out`, `--max-turns`, `--locale` and `--log-level` override `scriptsDir`, `maxTurns`, `locale` and `logLevel` for this run, and beat every other settings source. `--out` resolves against the working directory; an invalid value exits with `2` naming the flag (`--max-turns (from flag): ...`).
-- `--json` prints one result object on stdout instead of the three paths, for success and failure alike (see "What task C starts from").
+- `--json` prints one result object on stdout instead of the three paths, for success and failure alike (the object is described in the README's Usage).
 - The spec goes to the scripts folder (`scriptsDir`), the validated JSON to `.testpilot/tests/` and the log to `.testpilot/logs/`, all named after the input file; the log's name starts with the run's local start time (`<YYYY-MM-DD_HH-MM-SS>-<stem>.log`). On success stdout gets `spec:`, `test case:` and `log:` lines, relative to the working directory. This repo sets `scriptsDir` to `output/testpilot` in its own `.testpilot/config.json`, which `playwright.config.ts` (`testDir: './output'`) covers.
 
 **Built for agents.** Every command:
@@ -166,48 +166,15 @@ testpilot generate <path.md> \
 - never prompts unless it runs in an interactive terminal, so an agent never hangs on a question: the only stdin reader is `readHiddenInput` (`src/cli/config.ts`), used by `config set-azure-openai --prompt-api-key`, which refuses to run without a terminal;
 - exits with `0` on success, `1` when the test case fails to generate, `2` on a setup or config error (true for `doctor`, `init`, invalid settings, a missing input file and, in `generate`, a missing or rejected API key (HTTP 401, 403, 404) and a Chromium that cannot launch, see `exitCodeFor` in `src/cli/errors.ts`) and for commander's own usage errors (an unknown command or option, a missing argument); only help and version output exit `0` (`runCli` maps a `CommanderError` to `0` or `2`);
 - writes progress to stderr and results to stdout; `generate` logs the log path as the first and the last line, whatever the log level;
-- reports progress steadily during long runs (`generate` takes minutes), so it never looks stuck: a run-level watchdog in `generate` (`watchProgress`, `src/cli/generate.ts`) checks every 5 seconds when the last line was logged (`lastLineAt`, `src/logger.ts`), and after 30 seconds without one logs `Still working on <stage>, step "<step>" (<n>s)` from the run's progress, `<n>` counting from the last line that was not its own; it repeats every 30 seconds while the quiet lasts.
+- reports progress steadily during long runs (`generate` takes minutes), so it never looks stuck: a run-level watchdog in `generate` (`watchProgress`, `src/cli/generate.ts`) checks every 5 seconds when the last line was logged (`lastLineAt`, `src/logger.ts`), and after 10 seconds without one logs `Waiting for <stage> to finish: step <i> of <n>, "<step>" (<s>s)` from the run's progress (the step part only while a step is extracted), `<s>` counting from the last line that was not its own; it repeats every 10 seconds while the quiet lasts, so no gap exceeds 15 seconds (VS Code's terminal tool, with basic shell integration, treats 30 seconds without output as the command having finished).
 
-**What task C starts from.**
+### C. Skills (done)
 
-- `generate --json` prints one `GenerateResult` (`src/cli/generate.ts`) and nothing else on stdout:
-
-    ```json
-    {
-      "status": "failure",
-      "exitCode": 1,
-      "spec": null,
-      "testCase": null,
-      "log": "/work/project/.testpilot/logs/2026-11-07_19-02-16-test_login.log",
-      "error": {
-        "code": null,
-        "type": "ExtractorError",
-        "stage": "extract",
-        "step": "Verify the welcome message",
-        "message": "..."
-      }
-    }
-    ```
-
-    `status` is `success` or `failure`. `spec`, `testCase` and `log` are absolute paths, `null` when not written (`log` is `null` if the run failed before the log opened); on success `error` is `null`. `error.type` is the error's class name (`ConfigurationError`, `UsageError`, `StructurerError`, `McpError`, `ExtractorError`, `ValidatorError`, `GeneratorError`, or an LLM client's, e.g. `APIError`). A Chromium that cannot launch reports `McpError` (exit code `2`), with a `BrowserLaunchError` as its `cause`, because the Playwright MCP browser launches first. `stage` is `structure`, `extract`, `validate` or `generate` (`null` before the first), and `step` is the step being extracted or whose replay failed (`null` if none). **`error.code` is reserved and always `null`: task C assigns the stable codes, and adds a hint.** The object is printed for every failure after the arguments parse, a missing input file and an invalid configuration included.
-- Exit codes: `0` success, `1` the test case failed to generate, `2` a setup, usage or configuration error. `exitCodeFor` (`src/cli/errors.ts`) classifies a failure as `2` when it, or anything in its `cause` chain, is a `ConfigurationError`, a `BrowserLaunchError` or carries an HTTP status of 401, 403 or 404 (a wrong key, no access, a wrong endpoint or deployment); every other pipeline failure is `1`. A missing input file and commander's own usage errors are `2` too.
-- Outputs: the spec in `scriptsDir`, the JSON in `.testpilot/tests/`, the log in `.testpilot/logs/` (its first and last line is `Log: <path>`), Playwright MCP's own output in `.testpilot/.playwright-mcp/` under the project root. Progress and logs are on stderr, results on stdout.
-- VS Code Copilot runs the agent's commands in a real integrated terminal (`isTTY` is true), so the TTY check cannot stop it: the skill must never run `config set-azure-openai --prompt-api-key` itself, but ask the developer to run it.
-
-### C. Skills
-
-One skill, `testpilot`, in the [Agent Skills](https://code.visualstudio.com/docs/agent-customization/agent-skills) format (a `SKILL.md` with a name and description, plus reference files the agent reads only when it needs them). Copilot and Claude read the same format, so the same files are copied for every agent; only the destination differs.
-
-| `--skills=` | Project (`init --skills`) | User (`init --skills -g`) |
-|---|---|---|
-| `copilot` | `.github/skills/testpilot/` | `~/.copilot/skills/testpilot/` |
-| `claude` | `.claude/skills/testpilot/` | `~/.claude/skills/testpilot/` |
-
-The skill's source lives in the testpilot repo:
+One skill, `testpilot`, in the [Agent Skills](https://code.visualstudio.com/docs/agent-customization/agent-skills) format: a `SKILL.md` with a name and description, plus reference files the agent reads only when it needs them. Copilot and Claude read the same format, so the same files are copied for every agent; only the destination differs. Its source is `skills/testpilot/` in the testpilot repo:
 
 ```
 skills/testpilot/
-    SKILL.md                         # when to use it, the usual flow, hard rules
+    SKILL.md                         # when to use it, the usual flow, waiting for generate, hard rules
     references/
         commands.md                  # what each command is for and when to use it
         configuration.md             # config.json, TESTPILOT_ variables, precedence, LLM setup
@@ -215,20 +182,36 @@ skills/testpilot/
         errors.md                    # every error code: cause and fix
 ```
 
-What the agent must be able to do:
+**Installing it.** `testpilot init --skills[=<agent>] [-g]` (`src/cli/skills.ts`, called from `init`) copies the folder over any `testpilot` skill already there, so re-running it updates the skill and drops files the source no longer has.
 
-- **Know the commands.** `commands.md` explains what each command is for and when to use it; for exact flags it points to `testpilot <command> --help`, so the skill does not drift from the CLI.
-- **Help with LLM configuration.** The agent runs `testpilot config list` to see what is missing and `testpilot config set-azure-openai` with the values that are not secret. It never asks for, reads or writes the API key: it tells the developer to run `testpilot config set-azure-openai --prompt-api-key` in their own terminal.
-- **Write or check a test case.** Whether the developer already has a markdown test case or asks the agent to write one, the agent follows `test-case-format.md`.
-- **Generate a script.** The agent runs `testpilot doctor` when unsure of the setup, then `testpilot generate <path.md> --json`, waits for it to finish (it takes minutes), and reports the spec path.
-- **Explain failures.** From the `--json` result the agent tells the developer what failed, at which step, and what they can do about it, using `errors.md`.
+| `--skills` | Project | With `-g` (the user, for every project) |
+|---|---|---|
+| (no value) or `agents` | `.agents/skills/testpilot/` | `~/.agents/skills/testpilot/` |
+| `=copilot` | `.github/skills/testpilot/` | `~/.copilot/skills/testpilot/` |
+| `=claude` | `.claude/skills/testpilot/` | `~/.claude/skills/testpilot/` |
 
-`doctor` warns when an installed skill does not match the installed testpilot version, and re-running `init --skills` updates it.
+`.agents/skills/` is the default because VS Code Copilot reads it. Without `-g`, `init` installs the skill first, then runs its checks (which see the new copy), and writes `.testpilot/` only if they pass; the skill stays installed whatever they said. With `-g` only the user copy is installed and the project is neither checked nor changed. `-g` without `--skills` and an unknown agent exit with `2`. `doctor` compares each installed copy with the bundled one (same files, byte-equal) and warns, without failing, when one differs, printing the `init --skills ...` command that updates it.
 
-Two prerequisites, part of this task:
+**What the agent does** (the skill's hard rules):
 
-1. **A written test-case format.** Today the format (a title, the list of URLs, the numbered steps) exists only in `examples/` and the Structurer prompt. `test-case-format.md` describes it: what is required and optional, how to phrase action and verification steps, and a template.
-2. **Actionable errors.** Today a failure is one of six error types (`ConfigurationError`, `StructurerError`, `McpError`, `ExtractorError`, `ValidatorError`, `GeneratorError`) with a free-text message. Each failure gets a stable error code, and `generate --json` reports it with the failing stage, the failing step and a hint. `errors.md` maps every code to its cause and fix, e.g. a missing API key (run `config set-azure-openai --prompt-api-key`), the agent running out of turns on a step (split the step or raise `maxTurns`), a missing Chromium build (run `testpilot doctor`).
+- The developer brings the test. The agent uses their markdown file, or turns the steps they wrote in the prompt into a file following `test-case-format.md`; for a vague request it asks for the steps and never makes any up. It may look at the site with its own browser tools to sharpen a step's wording, not to add steps. A new file goes in the folder where the project already keeps test cases, or `.testpilot/input/`.
+- It runs `testpilot doctor` when unsure of the setup, then `testpilot generate <path.md> --json`, waits for it to finish (it takes minutes) and reports the spec path; it does not run the spec.
+- On a failure it relays the error code, stage, step, message, hint and log path from the `--json` result, recommends a fix when there is a concrete one, and waits: it never edits the test case or settings and re-runs on its own, and never guesses at a cause testpilot did not report.
+- It runs `doctor`, `config list`, `init` and `config set-azure-openai` with non-secret values freely, but asks before every `npx` or `npm` command and before `init --skills`.
+- It never handles the API key. VS Code Copilot runs commands in a real integrated terminal (`isTTY` is true), so the TTY check cannot stop it; the rule does: the developer runs `testpilot config set-azure-openai --prompt-api-key` in their own terminal.
+
+**Error codes and hints.** Every `generate` failure after the arguments parse has one of 20 stable codes (`UPPER_SNAKE_CASE`) with a fixed exit code and a static hint, catalogued in `ERROR_CODES` (`src/error-codes.ts`). `generate --json` reports `code` and `hint` in `error`; without `--json` the final error line is `CODE: message` followed by `Hint: <hint>`. Every `PipelineError` carries its code, set where it is thrown; `errorCodeFor` (`src/cli/errors.ts`) classifies everything else by walking the `cause` chain. `skills/testpilot/references/errors.md` maps each code to its cause and fix.
+
+**The task-B gaps task C settled:**
+
+- `ApiKeyInConfigError` (an API key in `config.json`) is `API_KEY_IN_CONFIG`, exit `2`.
+- A log folder that cannot be created is a `LogFolderError` (`src/cli/errors.ts`), reported as `LOG_DIR_FAILED`, exit `2`.
+- A wrong endpoint host (the OpenAI client's `APIConnectionError`) stays exit `1`, as `LLM_UNREACHABLE`; only 401, 403 and 404 are setup errors.
+- Missing Azure settings keep `stage: null`: the provider is built, and fails, before the structure stage starts. The code is `LLM_SETTINGS_MISSING`.
+- `generate`'s message for missing settings names the missing `TESTPILOT_` variables, while `doctor` and `init` still say `Missing required configuration variables`. The code and hint, and `doctor`'s `fix:` line, carry the next step either way.
+- A `ValidatorError` (`STEP_VALIDATION_FAILED`) still reports `stage` `extract` or `validate`, depending on whether a re-extraction ran before the last replay; the code and `error.step` identify it, and the stage is only context.
+
+**Still open:** the logger does not mask the API key in third-party error messages (none is known to include it); worth adding if errors get richer.
 
 ## Planned
 
