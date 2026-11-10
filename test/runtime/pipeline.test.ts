@@ -1,89 +1,27 @@
-/** Tests for src/main: the pipeline's wiring and its extract-then-validate loop. */
-
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+/** Tests for src/runtime/pipeline: the extract-then-validate loop. */
 
 import { describe, expect, type Mock, test, vi } from 'vitest';
 
-import { ExtractorError, McpError, ValidatorError } from '../src/exceptions.ts';
-import type { StepResult } from '../src/extractor/agent.ts';
-import type { RunStepOptions } from '../src/extractor/service.ts';
-import type { LLMProvider } from '../src/llm/protocol.ts';
-import { MockProvider } from '../src/llm/provider/mock.ts';
+import type { StepResult } from '../../src/extractor/agent.ts';
 import {
-    CliExit,
-    extractAndValidate,
-    loadSettingsOrFail,
-    MAX_RETRIES,
-    runCli,
-    type Stages,
-} from '../src/main.ts';
-import {
-    type Module,
     statement,
     type StepRef,
     type StepStatement,
     type TestCase,
-} from '../src/model/test-case.ts';
-import { BrowserError } from '../src/validator/browser.ts';
-import type { Validation } from '../src/validator/service.ts';
-import { useIsolatedSettingsEnv } from './helpers.ts';
-
-// The CLI tests run the real wiring offline: the LLM is a mock, and MCP, the
-// validation browser and the extractor are faked (non-functional req 7).
-const fakes = vi.hoisted(() => ({
-    provider: undefined as LLMProvider | undefined,
-    runStep: undefined as
-        ((...args: unknown[]) => Promise<StepStatement[]>) | undefined,
-}));
-
-vi.mock('../src/llm/factory.ts', () => ({
-    getLlmProvider: () => fakes.provider,
-}));
-
-vi.mock('../src/extractor/mcp/server.ts', () => ({
-    playwrightServer: () => () => Promise.reject(new Error('no real server')),
-    PlaywrightMCP: {
-        connect: () =>
-            Promise.resolve({
-                reset: vi.fn(),
-                run: () => Promise.resolve([]),
-                page: () =>
-                    Promise.resolve({
-                        url: () => 'https://example.com',
-                        title: () => Promise.resolve('Home'),
-                    }),
-                [Symbol.asyncDispose]: () => Promise.resolve(),
-            }),
-    },
-}));
-
-vi.mock('../src/validator/browser.ts', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('../src/validator/browser.ts')>()),
-    ValidationBrowser: {
-        launch: () =>
-            Promise.resolve({
-                run: (statements: unknown[]) =>
-                    Promise.resolve(statements.map(() => 0)),
-                reset: () => Promise.resolve(),
-                [Symbol.asyncDispose]: () => Promise.resolve(),
-            }),
-    },
-}));
-
-vi.mock('../src/extractor/service.ts', () => ({
-    Extractor: class {
-        async runStep(
-            module: Module,
-            index: number,
-            options: RunStepOptions,
-        ): Promise<StepResult> {
-            const statements = (await fakes.runStep?.(module, index, options)) ?? [];
-            return options.check?.(statements) ?? { statements };
-        }
-    },
-}));
+} from '../../src/model/test-case.ts';
+import {
+    ExtractorError,
+    McpError,
+    ValidatorError,
+} from '../../src/runtime/exceptions.ts';
+import {
+    extractAndValidate,
+    MAX_RETRIES,
+    type RunProgress,
+    type Stages,
+} from '../../src/runtime/pipeline.ts';
+import { BrowserError } from '../../src/validator/browser.ts';
+import type { Validation } from '../../src/validator/service.ts';
 
 const GOTO = "await page.goto('https://example.com/login');";
 const CLICK = "await page.getByRole('button', { name: 'Login' }).click();";
@@ -279,6 +217,7 @@ describe('extractAndValidate', () => {
         );
 
         expect(error).toBeInstanceOf(ValidatorError);
+        expect((error as ValidatorError).code).toBe('STEP_VALIDATION_FAILED');
         expect(String(error)).toContain('Log in');
         expect(String(error)).toContain('still wrong');
         // The budget is the run's, not the step's: an earlier step may have
@@ -290,7 +229,10 @@ describe('extractAndValidate', () => {
 
     test('an Extractor or MCP error propagates rather than being retried', async () => {
         // A rejected statement or a dead MCP server is not feedback to act on.
-        for (const error of [new ExtractorError('boom'), new McpError('boom')]) {
+        for (const error of [
+            new ExtractorError('boom', { code: 'STEP_ABANDONED' }),
+            new McpError('boom', { code: 'BROWSER_AGENT_FAILED' }),
+        ]) {
             const fake = stages([error]);
 
             await expect(extractAndValidate(testCase(['Log in']), fake)).rejects.toBe(
@@ -299,103 +241,127 @@ describe('extractAndValidate', () => {
             expect(fake.mcp.reset).not.toHaveBeenCalled();
         }
     });
-});
 
-describe('the CLI', () => {
-    useIsolatedSettingsEnv();
+    describe('progress', () => {
+        function progress(): RunProgress {
+            return { stage: undefined, step: undefined };
+        }
 
-    test('invalid configuration fails before any LLM call', () => {
-        // A bad LLM_PROVIDER must not get as far as opening a browser.
-        vi.stubEnv('LLM_PROVIDER', 'not-a-real-provider');
+        test('names the stage, and the step of each extraction', async () => {
+            // What the CLI reports when a run fails mid-way.
+            const seen: RunProgress[] = [];
+            const run = progress();
+            const fake = stages([], []);
+            fake.validator.validate.mockImplementation((validated) => {
+                seen.push({ ...run });
+                return Promise.resolve({ ok: true, testCase: validated, runTimeMs: 1 });
+            });
+            fake.extractor.runStep.mockImplementation(() => {
+                seen.push({ ...run });
+                return Promise.resolve({ statements: statements(CLICK) });
+            });
 
-        expect(() => loadSettingsOrFail()).toThrow(CliExit);
-    });
+            await extractAndValidate(testCase(['Open', 'Log in']), fake, run);
 
-    const SMOKE_SCRIPT = `/** Smoke test. */
-
-import { expect, test } from '@playwright/test';
-
-test.use({ locale: 'en-US' });
-
-/** Log in and see the welcome message. */
-test('Smoke test', async ({ page }) => {
-  // Click the login button
-  ${CLICK}
-
-  // Verify the welcome message
-  ${ASSERT}
-});
-`;
-
-    /** Run the CLI offline on a two-step test case; return its exit code. */
-    async function runPipeline(generatorReply: string): Promise<[number, string]> {
-        const markdownPath = path.join('automation', 'case.md');
-        await mkdir('automation');
-        await writeFile(markdownPath, '# Smoke test\n\nClick login, see the welcome.');
-
-        const structurerJson = JSON.stringify({
-            name: 'Smoke Test',
-            modules: [
-                {
-                    url: 'https://example.com',
-                    description: 'Home page',
-                    execution_steps: [
-                        { step: 'Click the login button' },
-                        { step: 'Verify the welcome message' },
-                    ],
-                },
-            ],
+            expect(seen).toEqual([
+                { stage: 'extract', step: 'Open', stepNumber: 1, stepCount: 2 },
+                { stage: 'extract', step: 'Log in', stepNumber: 2, stepCount: 2 },
+                { stage: 'validate', step: undefined },
+            ]);
         });
-        const verdict = JSON.stringify({ is_valid: true, reason: 'ok' });
-        const responses = [structurerJson, verdict, verdict, generatorReply];
-        fakes.provider = new MockProvider(() => responses.shift() ?? '');
-        const extracted = [statements(CLICK), statements(ASSERT)];
-        fakes.runStep = () => Promise.resolve(extracted.shift() ?? []);
 
-        const exitCode = await runCli([markdownPath]);
-        return [exitCode, path.join('output', 'automation')];
-    }
+        test('a failing replay names its step; its redo is extract', async () => {
+            const run = progress();
+            const fake = stages([], []);
+            const seen: RunProgress[] = [];
+            fake.validator.validate
+                .mockImplementationOnce((validated) => {
+                    seen.push({ ...run });
+                    return Promise.resolve({
+                        ok: false,
+                        testCase: validated,
+                        failure: { ref: { module: 0, step: 1 }, feedback: 'nope' },
+                    });
+                })
+                .mockImplementationOnce((validated) => {
+                    seen.push({ ...run });
+                    return Promise.resolve({
+                        ok: true,
+                        testCase: validated,
+                        runTimeMs: 1,
+                    });
+                });
+            fake.extractor.runStep.mockImplementation(() => {
+                seen.push({ ...run });
+                return Promise.resolve({ statements: statements(CLICK) });
+            });
 
-    test('runs the full pipeline offline', async () => {
-        // The CLI runs end to end and writes both artifacts, with no network.
-        // Each step's statements must land on that step in the persisted JSON,
-        // typed by their code.
-        const [exitCode, outputDir] = await runPipeline(SMOKE_SCRIPT);
+            await extractAndValidate(testCase(['Open', 'Log in']), fake, run);
 
-        expect(exitCode).toBe(0);
+            // Open, Log in, replay (fails), re-extraction of Log in, replay.
+            expect(seen).toEqual([
+                { stage: 'extract', step: 'Open', stepNumber: 1, stepCount: 2 },
+                { stage: 'extract', step: 'Log in', stepNumber: 2, stepCount: 2 },
+                { stage: 'validate', step: undefined },
+                { stage: 'extract', step: 'Log in', stepNumber: 2, stepCount: 2 },
+                { stage: 'validate', step: undefined },
+            ]);
+        });
 
-        const script = await readFile(path.join(outputDir, 'case.spec.ts'), 'utf8');
-        expect(script).toContain(CLICK);
-        expect(script).toContain(ASSERT);
+        test('keeps the failing replay step when the retries run out', async () => {
+            const run = progress();
+            const fake = stages([], []);
+            fake.validator.validate.mockImplementation((validated) =>
+                Promise.resolve({
+                    ok: false,
+                    testCase: validated,
+                    failure: { ref: { module: 0, step: 0 }, feedback: 'nope' },
+                }),
+            );
+            fake.extractor.runStep.mockResolvedValue({ statements: statements(GOTO) });
 
-        const persisted = JSON.parse(
-            await readFile(path.join(outputDir, 'case.json'), 'utf8'),
-        ) as {
-            modules: {
-                execution_steps: { statements: { code: string; type: string }[] }[];
-            }[];
-        };
-        const steps = persisted.modules[0]?.execution_steps ?? [];
-        expect(steps.map((step) => step.statements.map((s) => s.code))).toEqual([
-            [CLICK],
-            [ASSERT],
-        ]);
-        expect(steps.map((step) => step.statements.map((s) => s.type))).toEqual([
-            ['action'],
-            ['assertion'],
-        ]);
-    });
+            await expect(
+                extractAndValidate(testCase(['Open']), fake, run),
+            ).rejects.toBeInstanceOf(ValidatorError);
 
-    test('a generation failure keeps the validated JSON', async () => {
-        // Validation is the expensive part, so its JSON is on disk before generation.
-        const [exitCode, outputDir] = await runPipeline('not a script at all');
+            // The budget runs out inside `redo`, after the replay failed.
+            expect(run.step).toBe('Open');
+        });
 
-        expect(exitCode).toBe(1);
-        expect(existsSync(path.join(outputDir, 'case.json'))).toBe(true);
-        expect(existsSync(path.join(outputDir, 'case.spec.ts'))).toBe(false);
-    });
+        test('names its step when an earlier repair spends the retries', async () => {
+            // Re-extracting module 1's step spends all but one retry; the next
+            // restore breaks at "Log in", whose repair spends the last one.
+            const run = progress();
+            const rejected = { statements: statements(ASSERT), rejection: 'no' };
+            const fake = stages(
+                [
+                    statements(GOTO),
+                    statements(CLICK),
+                    statements(ASSERT),
+                    ...Array.from({ length: MAX_RETRIES - 1 }, () => rejected),
+                    statements(CLICK),
+                ],
+                [{ ref: { module: 1, step: 0 }, feedback: 'not visible' }],
+            );
+            for (let i = 1; i < MAX_RETRIES; i++) {
+                fake.mcp.run.mockResolvedValueOnce([]);
+            }
+            fake.mcp.run.mockRejectedValueOnce(
+                new BrowserError(CLICK, 'Timeout 30000ms exceeded', [10]),
+            );
 
-    test('a missing input file is a usage error', async () => {
-        expect(await runCli(['missing.md'])).toBe(2);
+            const error = await extractAndValidate(
+                testCase(['Open', 'Log in'], ['See the welcome']),
+                fake,
+                run,
+            ).catch((e: unknown) => e);
+
+            expect(String(error)).toContain('"See the welcome" still failing');
+            expect(run).toMatchObject({
+                step: 'See the welcome',
+                stepNumber: 3,
+                stepCount: 3,
+            });
+        });
     });
 });

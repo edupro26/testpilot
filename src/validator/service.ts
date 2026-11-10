@@ -10,7 +10,6 @@
 import type { Page } from '@playwright/test';
 import { z } from 'zod';
 
-import { errorMessage, ValidatorError } from '../exceptions.ts';
 import type { LLMProvider } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
 import {
@@ -19,6 +18,7 @@ import {
     type TestCase,
 } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
+import { errorMessage, ValidatorError } from '../runtime/exceptions.ts';
 import { BrowserError, type ReplayBrowser } from './browser.ts';
 import { failureAt, numbered, type StepFailure, withTimeouts } from './utils.ts';
 
@@ -174,9 +174,7 @@ export class Validator {
         } catch (error) {
             throw new ValidatorError(
                 `LLM response was not valid JSON: ${errorMessage(error)}`,
-                {
-                    cause: error,
-                },
+                { code: 'LLM_RESPONSE_INVALID', cause: error },
             );
         }
 
@@ -184,6 +182,7 @@ export class Validator {
         if (!parsed.success) {
             throw new ValidatorError(
                 `LLM response did not match the verdict shape: ${z.prettifyError(parsed.error)}`,
+                { code: 'LLM_RESPONSE_INVALID' },
             );
         }
         const semantic = parsed.data;

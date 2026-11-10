@@ -18,6 +18,7 @@ import {
 import { compileStatement } from '../extractor/utils.ts';
 import { logger } from '../logger.ts';
 import type { StepStatement } from '../model/test-case.ts';
+import { BrowserLaunchError, errorMessage } from '../runtime/exceptions.ts';
 import { trim } from './utils.ts';
 
 // How long any action or assertion may wait in a replay: Playwright MCP's own
@@ -92,6 +93,24 @@ export async function runStatements(
     return durations;
 }
 
+/**
+ * Launch Chromium the way both pipeline browsers need it.
+ *
+ * @param headless - Whether to run without a window.
+ * @returns The browser.
+ * @throws {BrowserLaunchError} If Chromium cannot be launched.
+ */
+export async function launchChromium(headless: boolean): Promise<Browser> {
+    try {
+        return await chromium.launch({ headless, args: [...CHROMIUM_ARGS] });
+    } catch (error) {
+        throw new BrowserLaunchError(
+            `Could not launch Chromium: ${errorMessage(error)}`,
+            { code: 'BROWSER_LAUNCH_FAILED', cause: error },
+        );
+    }
+}
+
 /** Options for `ValidationBrowser.launch`. */
 export interface LaunchOptions {
     /** Whether to run the browser headless. */
@@ -138,7 +157,7 @@ export class ValidationBrowser implements ReplayBrowser, AsyncDisposable {
         locale = 'en-US',
         timeoutMs = REPLAY_TIMEOUT_MS,
     }: LaunchOptions = {}): Promise<ValidationBrowser> {
-        const browser = await chromium.launch({ headless, args: [...CHROMIUM_ARGS] });
+        const browser = await launchChromium(headless);
         const context = await browser.newContext({ locale });
         const page = await context.newPage();
         logger.debug(`Validation browser launched (locale=${locale})`);

@@ -2,11 +2,11 @@
 
 import { z } from 'zod';
 
-import { errorMessage, StructurerError } from '../exceptions.ts';
 import type { LLMProvider } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
 import { type TestCase, TestCaseSchema } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
+import { errorMessage, StructurerError } from '../runtime/exceptions.ts';
 
 const SYSTEM_PROMPT = 'You are an expert QA automation engineer.';
 
@@ -48,9 +48,7 @@ export class Structurer {
         } catch (error) {
             throw new StructurerError(
                 `LLM response was not valid JSON: ${errorMessage(error)}`,
-                {
-                    cause: error,
-                },
+                { code: 'LLM_RESPONSE_INVALID', cause: error },
             );
         }
 
@@ -58,6 +56,7 @@ export class Structurer {
         if (!parsed.success) {
             throw new StructurerError(
                 `LLM response did not match the TestCase shape: ${z.prettifyError(parsed.error)}`,
+                { code: 'LLM_RESPONSE_INVALID' },
             );
         }
         const testCase = parsed.data;

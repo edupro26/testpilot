@@ -1,21 +1,24 @@
 /** Tests for src/extractor/mcp: collecting, the allowlists and the client. */
 
+import path from 'node:path';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BrowserContext } from '@playwright/test';
 import { describe, expect, test } from 'vitest';
 
-import { McpError } from '../../../src/exceptions.ts';
 import {
     ALLOWED_TOOLS,
     COLLECTABLE_TOOLS,
 } from '../../../src/extractor/mcp/constants.ts';
 import {
+    mcpConfig,
     McpResult,
     PlaywrightMCP,
     playwrightServer,
     type ServerFactory,
 } from '../../../src/extractor/mcp/server.ts';
 import { statement } from '../../../src/model/test-case.ts';
+import { McpError } from '../../../src/runtime/exceptions.ts';
 import { emitted } from '../fakes.ts';
 
 const CLICK = "await page.getByRole('button', { name: 'Consent' }).click();";
@@ -89,6 +92,16 @@ test('the tool allowlists', () => {
     }
 });
 
+test("Playwright MCP's output goes under the project root, wherever we run", () => {
+    // Relative, it would land under the working directory, e.g. a subfolder.
+    const root = path.resolve('/projects/shop');
+
+    expect(mcpConfig(root).outputDir).toBe(
+        path.join(root, '.testpilot', '.playwright-mcp'),
+    );
+    expect(path.isAbsolute(mcpConfig(root).outputDir ?? '')).toBe(true);
+});
+
 describe('PlaywrightMCP', () => {
     test('exposes only the allowlisted tools and flattens their results', async () => {
         await using mcp = await PlaywrightMCP.connect(
@@ -114,6 +127,7 @@ describe('PlaywrightMCP', () => {
         ).catch((e: unknown) => e);
 
         expect(error).toBeInstanceOf(McpError);
+        expect((error as McpError).code).toBe('BROWSER_AGENT_FAILED');
         expect(String(error)).toMatch(
             /missing expected tool\(s\): browser_verify_value/,
         );

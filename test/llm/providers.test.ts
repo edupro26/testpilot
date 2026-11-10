@@ -21,13 +21,15 @@ vi.mock('openai', () => ({
     },
 }));
 
+const NO_PROJECT = 'no-such-project';
+
 const AZURE_ENV = {
-    LLM_PROVIDER: 'azure_openai',
-    AZURE_OPENAI_ENDPOINT: 'https://example.openai.azure.com',
-    AZURE_OPENAI_API_KEY: 'fake-key',
-    AZURE_DEPLOYMENT_NAME: 'fake-deployment',
-    AZURE_MODEL_NAME: 'fake-model',
-    OPENAI_API_VERSION: '2025-04-01-preview',
+    TESTPILOT_LLM_PROVIDER: 'azure_openai',
+    TESTPILOT_AZURE_OPENAI_ENDPOINT: 'https://example.openai.azure.com',
+    TESTPILOT_AZURE_OPENAI_API_KEY: 'fake-key',
+    TESTPILOT_AZURE_DEPLOYMENT_NAME: 'fake-deployment',
+    TESTPILOT_AZURE_MODEL_NAME: 'fake-model',
+    TESTPILOT_OPENAI_API_VERSION: '2025-04-01-preview',
 };
 
 /** A Chat Completions response carrying one assistant message. */
@@ -43,7 +45,7 @@ test('Azure complete sends the request and returns the text', async () => {
     // The deployment is pinned in the client, so `model` carries the name.
     // jsonMode toggles a JSON-only response, and missing content is normalized
     // to an empty string.
-    const provider = new AzureOpenAIProvider(loadSettings(AZURE_ENV, 'no-such.env'));
+    const provider = new AzureOpenAIProvider(loadSettings(AZURE_ENV, NO_PROJECT));
     expect(azure.options).toMatchObject({ deployment: 'fake-deployment' });
 
     azure.create.mockResolvedValue(reply({ content: 'hello' }));
@@ -65,7 +67,7 @@ test('Azure complete sends the request and returns the text', async () => {
 test('Azure conversation translates tools and threads tool results', async () => {
     // Tools go out in the function shape; calls come back parsed, and their
     // results are sent on the next turn under the call's id.
-    const provider = new AzureOpenAIProvider(loadSettings(AZURE_ENV, 'no-such.env'));
+    const provider = new AzureOpenAIProvider(loadSettings(AZURE_ENV, NO_PROJECT));
     const conversation = provider.startConversation({
         systemPrompt: 'sys',
         userPrompt: 'user',

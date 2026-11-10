@@ -9,11 +9,11 @@
 
 import { z } from 'zod';
 
-import { ExtractorError } from '../exceptions.ts';
 import type { LLMProvider, ToolDefinition, ToolResult } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
 import { statement, type StepStatement } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
+import { ExtractorError } from '../runtime/exceptions.ts';
 import { COLLECTABLE_TOOLS } from './mcp/constants.ts';
 import type { McpConnection } from './mcp/server.ts';
 import { requireStatement } from './utils.ts';
@@ -162,6 +162,7 @@ export class StepAgent {
                 throw new ExtractorError(
                     `Model stopped without calling ${STEP_DONE} for step ` +
                         `${JSON.stringify(step)}: ${text === '' ? '(no text)' : text}`,
+                    { code: 'STEP_ABANDONED' },
                 );
             }
 
@@ -216,6 +217,7 @@ export class StepAgent {
 
         throw new ExtractorError(
             `Step ${JSON.stringify(step)} did not complete within ${this.maxTurns} turns`,
+            { code: 'STEP_OUT_OF_TURNS' },
         );
     }
 }
@@ -265,6 +267,7 @@ function collect(
         throw new ExtractorError(
             `${STEP_DONE} payload for step ${JSON.stringify(step)} was malformed: ` +
                 z.prettifyError(parsed.error),
+            { code: 'STEP_REPORT_INVALID' },
         );
     }
 
@@ -285,6 +288,7 @@ function collect(
                     `be written into the script:\n` +
                     `  claimed:  ${code}\n` +
                     `  emitted:  ${[...allowed].sort().join(', ') || '(nothing)'}`,
+                { code: 'STEP_REPORT_INVALID' },
             );
         }
         requireStatement(code, step);

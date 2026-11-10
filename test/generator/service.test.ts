@@ -2,7 +2,6 @@
 
 import { describe, expect, test } from 'vitest';
 
-import { GeneratorError } from '../../src/exceptions.ts';
 import { Generator } from '../../src/generator/service.ts';
 import { MockProvider } from '../../src/llm/provider/mock.ts';
 import {
@@ -10,6 +9,7 @@ import {
     type StepStatement,
     type TestCase,
 } from '../../src/model/test-case.ts';
+import { GeneratorError } from '../../src/runtime/exceptions.ts';
 
 const CONSENT = "await page.getByRole('button', { name: 'Consent' }).click();";
 const CLICK = "await page.getByRole('link', { name: 'Signup / Login' }).click();";
@@ -198,13 +198,16 @@ describe('rejects a script that is not exactly what was validated', () => {
             .catch((e: unknown) => e);
 
         expect(error).toBeInstanceOf(GeneratorError);
+        expect((error as GeneratorError).code).toBe('SCRIPT_ASSEMBLY_FAILED');
         expect(String(error)).toContain(match);
     });
 });
 
 test('rejects a test case with no statements', async () => {
     // An empty script would pass the test runner while testing nothing.
-    await expect(
-        new Generator(new MockProvider(script())).run(testCase(['Do nothing', []])),
-    ).rejects.toThrow(/no validated statements/);
+    const error = await new Generator(new MockProvider(script()))
+        .run(testCase(['Do nothing', []]))
+        .catch((e: unknown) => e);
+    expect(String(error)).toMatch(/no validated statements/);
+    expect((error as GeneratorError).code).toBe('NO_STATEMENTS');
 });

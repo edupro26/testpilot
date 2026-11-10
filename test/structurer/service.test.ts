@@ -2,8 +2,8 @@
 
 import { expect, test } from 'vitest';
 
-import { StructurerError } from '../../src/exceptions.ts';
 import { MockProvider } from '../../src/llm/provider/mock.ts';
+import { StructurerError } from '../../src/runtime/exceptions.ts';
 import { Structurer } from '../../src/structurer/service.ts';
 
 const VALID_RESPONSE = JSON.stringify({
@@ -32,6 +32,9 @@ test('run raises StructurerError for a bad LLM response', async () => {
     const notJson = new Structurer(new MockProvider('not valid json'));
     await expect(notJson.run('# Some test case')).rejects.toThrow(StructurerError);
     await expect(notJson.run('# Some test case')).rejects.toThrow(/not valid JSON/);
+    await expect(notJson.run('# Some test case')).rejects.toMatchObject({
+        code: 'LLM_RESPONSE_INVALID',
+    });
 
     const wrongShape = new Structurer(
         new MockProvider(JSON.stringify({ unexpected: 'shape' })),

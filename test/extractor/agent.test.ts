@@ -2,12 +2,12 @@
 
 import { describe, expect, test } from 'vitest';
 
-import { ExtractorError } from '../../src/exceptions.ts';
 import { StepAgent, type StepResult } from '../../src/extractor/agent.ts';
 import { McpResult } from '../../src/extractor/mcp/server.ts';
 import type { ToolUseResponse } from '../../src/llm/protocol.ts';
 import { MockProvider, toolTurn } from '../../src/llm/provider/mock.ts';
 import { statement, type StepStatement } from '../../src/model/test-case.ts';
+import { ExtractorError } from '../../src/runtime/exceptions.ts';
 import { emitted, FakeMCP } from './fakes.ts';
 
 const CLICK = "await page.getByRole('link', { name: 'Signup / Login' }).click();";
@@ -162,6 +162,7 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
             ran: CLICK,
             reported: 'await page.evaluate("fetch(\'/admin\')");',
             match: 'no collectable',
+            code: 'STEP_REPORT_INVALID',
         },
         {
             id: 'edited',
@@ -169,6 +170,7 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
             ran: CLICK,
             reported: "await page.getByRole('link', { name: 'Signup' }).click();",
             match: 'no collectable',
+            code: 'STEP_REPORT_INVALID',
         },
         {
             id: 'widened-truncated-locator',
@@ -178,6 +180,7 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
                 "await expect(page.getByText('Your email or password is incorrect!'))" +
                 '.toBeVisible();',
             match: 'no collectable',
+            code: 'STEP_REPORT_INVALID',
         },
         {
             id: 'non-collectable',
@@ -185,6 +188,7 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
             ran: EVALUATE,
             reported: EVALUATE,
             match: 'no collectable',
+            code: 'STEP_REPORT_INVALID',
         },
         {
             id: 'does-not-parse',
@@ -192,14 +196,17 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
             ran: 'await page.evaluate(() => {',
             reported: 'await page.evaluate(() => {',
             match: 'does not parse',
+            code: 'INTERNAL_ERROR',
         },
-    ])('$id', async ({ tool, ran, reported, match }) => {
+    ])('$id', async ({ tool, ran, reported, match, code }) => {
         const mcp = new FakeMCP({ [tool]: new McpResult(false, emitted(ran)) });
         const llm = new MockProvider('', [toolTurn(tool, {}), done(reported)]);
 
-        await expect(
-            new StepAgent(llm, mcp).run('Do the step', { context: 'fresh' }),
-        ).rejects.toThrow(new RegExp(match));
+        const error = await new StepAgent(llm, mcp)
+            .run('Do the step', { context: 'fresh' })
+            .catch((e: unknown) => e);
+        expect(String(error)).toMatch(new RegExp(match));
+        expect((error as ExtractorError).code).toBe(code);
     });
 });
 
@@ -216,11 +223,11 @@ test('the loop ends only through step_done', async () => {
             toolTurn('browser_find', { text: 'x' }, `c${i}`),
         ),
     );
-    await expect(
-        new StepAgent(looping, new FakeMCP(), 3).run('Click something', {
-            context: 'x',
-        }),
-    ).rejects.toThrow(/did not complete within/);
+    const spent = await new StepAgent(looping, new FakeMCP(), 3)
+        .run('Click something', { context: 'x' })
+        .catch((e: unknown) => e);
+    expect(String(spent)).toMatch(/did not complete within/);
+    expect((spent as ExtractorError).code).toBe('STEP_OUT_OF_TURNS');
 
     const chatty = new MockProvider('', [
         { text: 'I am not sure how to proceed', toolCalls: [] },
@@ -230,4 +237,5 @@ test('the loop ends only through step_done', async () => {
         .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ExtractorError);
     expect(String(error)).toMatch(/stopped without calling/);
+    expect((error as ExtractorError).code).toBe('STEP_ABANDONED');
 });

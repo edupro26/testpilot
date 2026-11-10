@@ -1,0 +1,413 @@
+/** The pipeline: structure, extract and validate, then generate. */
+
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
+import { CONFIG_DIR, type Settings } from '../config.ts';
+import type { StepResult } from '../extractor/agent.ts';
+import { PlaywrightMCP, playwrightServer } from '../extractor/mcp/server.ts';
+import { Extractor } from '../extractor/service.ts';
+import { Generator } from '../generator/service.ts';
+import { getLlmProvider } from '../llm/factory.ts';
+import type { LLMProvider } from '../llm/protocol.ts';
+import { logger } from '../logger.ts';
+import {
+    type Module,
+    placeStatements,
+    type StepRef,
+    type StepStatement,
+    type TestCase,
+} from '../model/test-case.ts';
+import { Structurer } from '../structurer/service.ts';
+import { BrowserError, ValidationBrowser } from '../validator/browser.ts';
+import { Validator } from '../validator/service.ts';
+import { failureAt, type StepFailure } from '../validator/utils.ts';
+import { ValidatorError } from './exceptions.ts';
+
+/** Where a run writes its two artifacts, as absolute paths. */
+export interface OutputPaths {
+    /** The generated Playwright script. */
+    spec: string;
+    /** The validated test case JSON. */
+    testCase: string;
+}
+
+/**
+ * Work out where a test case's outputs go.
+ *
+ * @param markdownPath - The test case specification; only its name is used.
+ * @param root - The project root.
+ * @param scriptsDir - The scripts folder, resolved against `root`.
+ * @returns `<scriptsDir>/<stem>.spec.ts` and `<root>/.testpilot/tests/<stem>.json`,
+ *   where `<stem>` is the input's name without its extension.
+ */
+export function outputPaths(
+    markdownPath: string,
+    root: string,
+    scriptsDir: string,
+): OutputPaths {
+    const stem = path.basename(markdownPath, path.extname(markdownPath));
+    return {
+        spec: path.resolve(root, scriptsDir, `${stem}.spec.ts`),
+        testCase: path.resolve(root, CONFIG_DIR, 'tests', `${stem}.json`),
+    };
+}
+
+/** The pipeline's stages, in order. */
+export type Stage = 'structure' | 'extract' | 'validate' | 'generate';
+
+/**
+ * Where a run is, so that a failure can say where it happened and a progress
+ * line how far the run has got.
+ *
+ * The pipeline updates it in place as it goes; the caller reads it after a
+ * failure.
+ */
+export interface RunProgress {
+    /** The stage under way; `undefined` before the first one starts. */
+    stage: Stage | undefined;
+    /** The step being extracted, or whose replay failed; `undefined` if none. */
+    step: string | undefined;
+    /** The extracted step's number in the test case, from 1; `undefined` if none. */
+    stepNumber?: number | undefined;
+    /** How many steps the test case has, while one is extracted. */
+    stepCount?: number | undefined;
+}
+
+/**
+ * The input a test case's outputs were generated from, as their JSON records it.
+ *
+ * Two inputs with the same file name share their outputs, so a run checks this
+ * before it overwrites them.
+ *
+ * @param paths - The outputs.
+ * @returns The JSON's `source`; `undefined` if there is no JSON, it cannot be
+ *   read, or it records no source.
+ */
+export async function outputSource(paths: OutputPaths): Promise<string | undefined> {
+    let recorded: unknown;
+    try {
+        recorded = JSON.parse(await readFile(paths.testCase, 'utf8'));
+    } catch {
+        return undefined;
+    }
+    if (typeof recorded !== 'object' || recorded === null || !('source' in recorded)) {
+        return undefined;
+    }
+    return typeof recorded.source === 'string' ? recorded.source : undefined;
+}
+
+/** What `runPipeline` takes besides the input and the settings. */
+export interface PipelineOptions {
+    /** Where to write the outputs. */
+    paths: OutputPaths;
+    /**
+     * The input as the outputs' owner, recorded in the JSON as `source`: its path
+     * relative to the project root, with `/` separators.
+     */
+    source: string;
+    /** The project root, under which Playwright MCP keeps its own output. */
+    root: string;
+    /** Show the browser the agent drives; the validation browser stays headless. */
+    headed?: boolean;
+    /** Updated with the stage and step under way, for the caller to read. */
+    progress?: RunProgress;
+}
+
+/**
+ * Run the full pipeline on a markdown test case and persist its output.
+ *
+ * Writes the validated test case JSON, with the input as its `source`, and the
+ * generated script to `options.paths`, creating their folders; the JSON is
+ * written before generation, so a generation failure never loses it.
+ *
+ * @param markdownPath - The test case specification.
+ * @param settings - The application settings.
+ * @param options - Where to write the outputs, the project root, whether to
+ *   show the agent's browser, and the progress record to keep up to date.
+ * @throws {PipelineError} If a stage fails.
+ */
+export async function runPipeline(
+    markdownPath: string,
+    settings: Settings,
+    options: PipelineOptions,
+): Promise<void> {
+    logger.info(
+        `Running pipeline on ${markdownPath} (provider=${settings.llmProvider})`,
+    );
+
+    const progress = options.progress ?? { stage: undefined, step: undefined };
+    const llm = getLlmProvider(settings);
+    progress.stage = 'structure';
+    const structurer = new Structurer(llm);
+    const testCase = await structurer.run(await readFile(markdownPath, 'utf8'));
+
+    progress.stage = 'extract';
+    const { result, runTimeMs } = await runStages(
+        testCase,
+        llm,
+        settings,
+        { root: options.root, headed: options.headed === true },
+        progress,
+    );
+    logger.info(`Extracted and validated ${result.modules.length} module(s)`);
+
+    const { spec, testCase: jsonPath } = options.paths;
+    await mkdir(path.dirname(jsonPath), { recursive: true });
+    const persisted = { source: options.source, ...result };
+    await writeFile(jsonPath, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8');
+    logger.info(`Wrote validated test case to ${jsonPath}`);
+
+    progress.stage = 'generate';
+    progress.step = undefined;
+    progress.stepNumber = undefined;
+    progress.stepCount = undefined;
+    const generator = new Generator(llm, settings.browserLocale);
+    const script = await generator.run(result, runTimeMs);
+
+    await mkdir(path.dirname(spec), { recursive: true });
+    await writeFile(spec, script, 'utf8');
+    logger.info(`Wrote generated script to ${spec}`);
+}
+
+/** Re-extractions a run may spend, whatever triggered them. */
+export const MAX_RETRIES = 5;
+
+/** The stages `extractAndValidate` drives. */
+export interface Stages {
+    extractor: Pick<Extractor, 'runStep'>;
+    validator: Pick<Validator, 'validate' | 'judge'>;
+    mcp: Pick<PlaywrightMCP, 'reset' | 'run' | 'page'>;
+}
+
+/** Open the agent's and the replay browser, and extract and validate in them. */
+async function runStages(
+    testCase: TestCase,
+    llm: LLMProvider,
+    settings: Settings,
+    server: { root: string; headed: boolean },
+    progress: RunProgress,
+): Promise<{ result: TestCase; runTimeMs: number }> {
+    await using mcp = await PlaywrightMCP.connect(
+        playwrightServer(settings.browserLocale, server),
+    );
+    await using browser = await ValidationBrowser.launch({
+        locale: settings.browserLocale,
+    });
+    // Awaited here, or the browsers would close before the run ends.
+    return await extractAndValidate(
+        testCase,
+        {
+            extractor: new Extractor(llm, mcp, settings.mcpMaxTurns),
+            validator: new Validator(llm, browser),
+            mcp,
+        },
+        progress,
+    );
+}
+
+/**
+ * Extract every step, then replay the whole script until it passes.
+ *
+ * A failure (or a step the judge still rejects) sends only that step back to
+ * the agent, with feedback, from its browser restored to the state before
+ * the step. Every re-extraction spends one of `MAX_RETRIES`.
+ *
+ * @param testCase - The structured test case, its steps still without statements.
+ * @param stages - The extractor, validator and browser to drive.
+ * @param progress - Updated with the stage and step under way.
+ * @returns The validated test case, and how long its replay took.
+ * @throws {ValidatorError} If the retries run out.
+ */
+export function extractAndValidate(
+    testCase: TestCase,
+    stages: Stages,
+    progress: RunProgress = { stage: undefined, step: undefined },
+): Promise<{ result: TestCase; runTimeMs: number }> {
+    return new ExtractionRun(testCase, stages, progress).execute();
+}
+
+/** One run of `extractAndValidate`: the test case so far, and the retries left. */
+class ExtractionRun {
+    private readonly stages: Stages;
+    private readonly progress: RunProgress;
+    private working: TestCase;
+    private retries = MAX_RETRIES;
+
+    constructor(testCase: TestCase, stages: Stages, progress: RunProgress) {
+        this.stages = stages;
+        this.progress = progress;
+        this.working = testCase;
+    }
+
+    async execute(): Promise<{ result: TestCase; runTimeMs: number }> {
+        for (const ref of this.refs()) {
+            const { statements, rejection } = await this.extract(ref);
+            if (rejection === undefined) {
+                this.store(ref, statements);
+            } else {
+                await this.redo(ref, rejection);
+            }
+        }
+
+        for (;;) {
+            this.progress.stage = 'validate';
+            this.progress.step = undefined;
+            this.progress.stepNumber = undefined;
+            this.progress.stepCount = undefined;
+            const validation = await this.stages.validator.validate(this.working);
+            this.working = validation.testCase;
+            if (validation.ok) {
+                return { result: this.working, runTimeMs: validation.runTimeMs };
+            }
+            const { ref, feedback } = validation.failure;
+            this.progress.step = this.text(ref);
+            logger.warning(
+                `Validation failed at step ${JSON.stringify(this.text(ref))}`,
+            );
+            await this.redo(ref, feedback);
+        }
+    }
+
+    /** Have the agent perform a step from where its browser is, judging each report. */
+    private extract(ref: StepRef, feedback?: string): Promise<StepResult> {
+        const step = this.text(ref);
+        this.progress.stage = 'extract';
+        this.locate(ref);
+        const history = placeStatements(this.working, ref).map(
+            ({ statement }) => statement.code,
+        );
+        return this.stages.extractor.runStep(this.module(ref), ref.step, {
+            history,
+            ...(feedback === undefined ? {} : { feedback }),
+            check: async (statements) => {
+                const verdict = await this.stages.validator.judge(
+                    step,
+                    statements,
+                    await this.stages.mcp.page(),
+                );
+                return verdict.isValid
+                    ? { statements: verdict.statements }
+                    : { statements, rejection: verdict.feedback };
+            },
+        });
+    }
+
+    /** Name `ref` as the step under way in the progress. */
+    private locate(ref: StepRef): void {
+        const refs = this.refs();
+        this.progress.step = this.text(ref);
+        this.progress.stepNumber =
+            refs.findIndex(
+                (other) => other.module === ref.module && other.step === ref.step,
+            ) + 1;
+        this.progress.stepCount = refs.length;
+    }
+
+    /**
+     * Re-extract a step with feedback until the judge accepts it; a restore
+     * that breaks at an earlier step re-extracts that step first.
+     *
+     * @throws {ValidatorError} If the retries run out; the progress names `ref`.
+     */
+    private async redo(ref: StepRef, feedback: string): Promise<void> {
+        for (;;) {
+            if (this.retries === 0) {
+                // Repairing an earlier step may have left the progress on it.
+                this.locate(ref);
+                throw new ValidatorError(
+                    `Step ${JSON.stringify(this.text(ref))} still failing, and ` +
+                        `the run's ${MAX_RETRIES} retries are spent. Last ` +
+                        `failure:\n${feedback}`,
+                    { code: 'STEP_VALIDATION_FAILED' },
+                );
+            }
+            const broken = await this.restore(ref);
+            if (broken !== undefined) {
+                const step = JSON.stringify(this.text(broken.ref));
+                logger.warning(`Restoring the browser failed at step ${step}`);
+                await this.redo(broken.ref, broken.feedback);
+                continue;
+            }
+            this.retries--;
+            logger.info(
+                `Re-extracting step ${JSON.stringify(this.text(ref))} ` +
+                    `(retry ${MAX_RETRIES - this.retries}/${MAX_RETRIES})`,
+            );
+            const { statements, rejection } = await this.extract(ref, feedback);
+            if (rejection === undefined) {
+                this.store(ref, statements);
+                return;
+            }
+            feedback = rejection;
+        }
+    }
+
+    /**
+     * Bring the agent's browser to the state before `ref`, by running the
+     * earlier steps' statements in a fresh session.
+     *
+     * @returns The earlier step whose code failed, if one did.
+     */
+    private async restore(ref: StepRef): Promise<StepFailure | undefined> {
+        await this.stages.mcp.reset();
+        const prefix = placeStatements(this.working, ref);
+        if (prefix.length === 0) {
+            return undefined;
+        }
+        try {
+            await this.stages.mcp.run(prefix.map(({ statement }) => statement));
+        } catch (error) {
+            if (!(error instanceof BrowserError)) {
+                throw error;
+            }
+            return failureAt(
+                prefix,
+                error,
+                'This statement failed when the pipeline re-ran the accepted ' +
+                    'code to restore the browser for a later step:',
+            );
+        }
+        return undefined;
+    }
+
+    /** Every step, in run order. */
+    private refs(): StepRef[] {
+        return this.working.modules.flatMap((module, moduleIndex) =>
+            module.execution_steps.map((_, step) => ({ module: moduleIndex, step })),
+        );
+    }
+
+    private module(ref: StepRef): Module {
+        const module = this.working.modules[ref.module];
+        if (module === undefined) {
+            throw new RangeError(`The test case has no module ${ref.module}`);
+        }
+        return module;
+    }
+
+    private text(ref: StepRef): string {
+        const step = this.module(ref).execution_steps[ref.step];
+        if (step === undefined) {
+            throw new RangeError(`Module ${ref.module} has no step ${ref.step}`);
+        }
+        return step.step;
+    }
+
+    /** Replace a step's statements. */
+    private store(ref: StepRef, statements: StepStatement[]): void {
+        this.working = {
+            ...this.working,
+            modules: this.working.modules.map((module, moduleIndex) =>
+                moduleIndex !== ref.module
+                    ? module
+                    : {
+                          ...module,
+                          execution_steps: module.execution_steps.map((step, index) =>
+                              index === ref.step ? { ...step, statements } : step,
+                          ),
+                      },
+            ),
+        };
+    }
+}

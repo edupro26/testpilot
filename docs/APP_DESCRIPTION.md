@@ -98,7 +98,7 @@ Once all steps are done, the whole script is validated in one replay.
     (an element not found, a locator matching several elements, a failed
     assertion) ends the round and is mapped back to its step
 
-If the replay fails at step N, that step is **re-extracted** in the Agent Loop with the failure as feedback, and only that step: the agent's browser is restored to the state before it by running the earlier steps' accepted code in a fresh session (see *Retry and reset*), the other steps keep their statements, and the whole script is validated again. A step the semantic validation still rejects once the agent's two repairs run out is re-extracted the same way. Every re-extraction spends one of 5 retries per run (`MAX_RETRIES` in `src/main.ts`); when they run out, the run aborts. Once all steps are validated, the test case goes to the Generator.
+If the replay fails at step N, that step is **re-extracted** in the Agent Loop with the failure as feedback, and only that step: the agent's browser is restored to the state before it by running the earlier steps' accepted code in a fresh session (see *Retry and reset*), the other steps keep their statements, and the whole script is validated again. A step the semantic validation still rejects once the agent's two repairs run out is re-extracted the same way. Every re-extraction spends one of 5 retries per run (`MAX_RETRIES` in `src/runtime/pipeline.ts`); when they run out, the run aborts. Once all steps are validated, the test case goes to the Generator.
 
 **Output**: The validated test case in JSON format, saved to disk before generation
 
@@ -192,23 +192,25 @@ test('Login user with incorrect credentials', async ({ page }) => {
 2. The Structurer converts the markdown into the structured test case via one LLM call.
 3. For each execution step, in order, the Extractor performs the step in a live browser through Playwright MCP, using only an allowlisted set of tools, and reports the code lines that belong to the step. Only lines emitted by a code-generating tool during that step are accepted.
 4. The Validator judges each step's code via an LLM call as the agent reports it; a rejection is returned to the agent, which fixes it in the same conversation up to two times. Once every step is extracted, the Validator replays the whole script in a freshly reset Validation Browser, back to back, timing each assertion and giving one that needed longer than Playwright's default a measured `timeout`.
-5. A step that fails the replay, or that the semantic validation still rejects after the agent's repairs, is re-extracted with the failure as feedback, from the agent's browser restored to the state before the step; the other steps keep their statements. A run may re-extract at most 5 times (`MAX_RETRIES`); then it aborts with a `ValidatorError`. An Extractor failure (no completion within `MCP_MAX_TURNS`, a malformed report, or a line Playwright MCP never ran) aborts the run with an `ExtractorError`.
+5. A step that fails the replay, or that the semantic validation still rejects after the agent's repairs, is re-extracted with the failure as feedback, from the agent's browser restored to the state before the step; the other steps keep their statements. A run may re-extract at most 5 times (`MAX_RETRIES`); then it aborts with a `ValidatorError` (`STEP_VALIDATION_FAILED`). An Extractor failure (no completion within `maxTurns`, a malformed report, or a line Playwright MCP never ran) aborts the run with an `ExtractorError`.
 6. Popups (cookie-consent banners, newsletters, surveys) are dismissed in the step that makes them appear, as ordinary validated statements. There is no site-specific or injected overlay handling.
 7. The Generator turns the validated test case into a single executable Playwright Test (TypeScript) spec, using the `page` fixture, with every validated statement copied unchanged but for its measured timeout. A script that drops or alters a statement or does not parse aborts the run with a `GeneratorError`.
-8. The CLI runs the full pipeline as a single command: `testpilot <path.md>` (after `npm link`; `npm run testpilot -- <path.md>` without it). Playwright is the only target framework.
-9. The pipeline writes the validated JSON and the generated script under `output/<input's parent folder name>/`, both named after the input file (e.g. `examples/automation/test_x.md` -> `output/automation/test_x.json` and `output/automation/test_x.spec.ts`). The JSON is written before generation, so a generation failure never loses it.
-10. The LLM provider is selectable via `LLM_PROVIDER`: `azure_openai` (the primary target) or `mock` (offline development and testing).
+8. The CLI runs the full pipeline as a single command: `testpilot generate <path.md>` (after `npm link`; `npm run --silent testpilot -- generate <path.md>` without it, `--silent` keeping npm's banner off stdout). Playwright is the only target framework. Flags change one run: `--headed` shows the browser the agent drives (the validation browser stays headless), and `--out`, `--max-turns`, `--locale` and `--log-level` override `scriptsDir`, `maxTurns`, `locale` and `logLevel`, beating every other settings source; `--out` is relative to the working directory, and an invalid flag value is a configuration error (exit status 2) that names the flag. Results go to stdout and progress to stderr: a successful run prints `spec:`, `test case:` and `log:` paths, and `--json` prints one JSON object instead (`GenerateResult`: `status`, `exitCode`, absolute `spec`, `testCase` and `log` paths, and on failure `error` with `code`, `hint`, `type`, `stage`, `step` and `message`), for every failure after the arguments parse. Every `generate` failure after the arguments parse has one of 21 stable error codes (`UPPER_SNAKE_CASE`, e.g. `INPUT_NOT_FOUND`, `STEP_OUT_OF_TURNS`), each with a fixed exit code and a static hint, catalogued in `src/error-codes.ts` (`ERROR_CODES`). `errorCodeFor` classifies a failure by walking its `cause` chain, the most specific match winning (a `BrowserLaunchError` inside an `McpError` is `BROWSER_LAUNCH_FAILED`); every `PipelineError` carries its code, set where it is thrown. Without `--json`, the final stderr error line is `CODE: message`, followed by a `Hint: ...` line; both are logged whatever the log level. The exit status is `0` on success, `1` when the test case fails to generate and `2` for a setup problem: an invalid configuration, a missing input file or API key, an HTTP 401, 403 or 404 from the LLM service, or a Chromium that cannot launch. The pipeline updates a `RunProgress` (stage and step) as it goes, which is how a failure names where it happened, and whenever nothing has been logged for 10 seconds (checked every 5, so no gap exceeds 15), a watchdog logs `Waiting for <stage> to finish: step <i> of <n>, "<step>" (<s>s)` (the step number and step only while a step is extracted, from the `stepNumber` and `stepCount` it also tracks) from it, whatever the log level, so a long run never looks stuck.
+9. The pipeline writes the generated script to the scripts folder (`scriptsDir`, resolved against the project root; `testpilot/` by default) and the validated JSON to `.testpilot/tests/`, both named after the input file (e.g. `examples/automation/test_x.md` -> `testpilot/test_x.spec.ts` and `.testpilot/tests/test_x.json`). The JSON records the input it came from as `source` (relative to the project root); a run whose JSON already exists with another `source`, an input with the same name in another folder, stops before it starts with `OUTPUT_CONFLICT` (exit `2`), so it never overwrites another test case's outputs. The JSON is written before generation, so a generation failure never loses it. Each run also writes its log lines (the same as stderr, without colour) to a file of its own, `.testpilot/logs/<YYYY-MM-DD_HH-MM-SS>-<stem>.log`, created before the run and never shared: a run of the same input that started in the same second gets `_2`, `_3`, … after the time; the log's path is the first and the last line logged. A log file that cannot be created is a warning: the run goes on without it, and reports `log` as `null` (`(none)` without `--json`). The input path resolves against the working directory, the outputs against the project root.
+10. The LLM provider is selected by `llmProvider` (`TESTPILOT_LLM_PROVIDER`): `azure_openai`, the only provider for now and the default. The mock provider is a test double, not a provider a run can select.
 11. All three browsers (Playwright MCP's, the Validation Browser and the generated script's) use the same locale, so locators found by their text match at run time.
+12. `testpilot init --skills[=<agent>] [-g]` installs the bundled agent skill (`skills/testpilot/`, in the Agent Skills format) by copying it over any existing `testpilot` skill folder, so files removed from the source are removed from the copy. The destination is `.agents/skills/testpilot/` (no value, or `agents`), `.github/skills/testpilot/` (`copilot`) or `.claude/skills/testpilot/` (`claude`) in the project, and `~/.agents/skills/testpilot/`, `~/.copilot/skills/testpilot/` or `~/.claude/skills/testpilot/` with `-g`. Without `-g` it runs as part of `init`: the skill is installed first, whatever the checks then say (so they compare the copy just installed, not the one it replaced), the checks run and print, and `.testpilot/` is written only if they pass (exit status 2 if a check other than the LLM settings failed). With `-g` only the user copy is installed, and the project is neither checked nor changed. `-g` without `--skills` and an unknown agent are usage errors (exit status 2).
+13. `testpilot doctor` also compares each installed copy of the skill (the six destinations above) with the bundled one, file by file: the same relative paths with byte-equal contents. A copy that differs (`<path> is outdated`), from an older testpilot or edited by hand, is a warning (not a failure, so the exit status is unchanged) whose fix is the `testpilot init --skills ...` command that replaces it; a copy that matches is an `ok` line; with no copy installed there is no line.
 
 ### Non-functional
 1. TypeScript, run directly by Node.js ≥24 (no build step), `npm`-only dependency management.
 2. `strict` TypeScript with every function's return type declared; JSON contracts are zod schemas.
 3. Code passes `tsc`, the repo's ESLint configuration (type-aware, TSDoc on exported APIs) and Prettier (print width 88) with zero errors.
-4. Secrets are sourced only from environment variables/`.env`, never hardcoded; `.env` stays gitignored.
+4. Secrets are sourced only from `TESTPILOT_` environment variables (the shell, `.env` or `.env.local`), never from `.testpilot/config.json` and never hardcoded.
 5. No out-of-band authentication: a page behind a login is reachable only if the test case's own steps log in.
 6. Generated scripts must pass `npx playwright test` against the live site they were generated from, for the demoed examples.
 7. Each stage is unit-testable offline via the mock LLM provider and a fake MCP server, with no live network or LLM calls.
-8. Logging goes through the application logger (not ad hoc `console` calls), level controlled by `LOG_LEVEL`, with clear per-stage log lines.
+8. Logging goes through the application logger (not ad hoc `console` calls), level controlled by `logLevel` (`TESTPILOT_LOG_LEVEL`), with clear per-stage log lines.
 9. Single-user local CLI tool; no persistence layer or multi-tenant concerns in scope.
 10. The application runs Playwright MCP in-process, and fails at startup with a clear error if it does not offer every allowlisted tool.
 
@@ -256,7 +258,7 @@ Every statement was proven against a live browser, and letting an LLM rewrite th
 
 ### Locale
 
-Sites translate their text by the browser's `Accept-Language`, and most locators are text-based. `BROWSER_LOCALE` sets the locale of all three browsers: it is used for the context handed to Playwright MCP and for the Validation Browser's context, and pinned into the generated script by `test.use({ locale })`.
+Sites translate their text by the browser's `Accept-Language`, and most locators are text-based. The `locale` setting (`TESTPILOT_LOCALE`) sets the locale of all three browsers: it is used for the context handed to Playwright MCP and for the Validation Browser's context, and pinned into the generated script by `test.use({ locale })`.
 
 ### Playwright MCP version
 
@@ -264,7 +266,7 @@ Sites translate their text by the browser's `Accept-Language`, and most locators
 
 ## Playwright MCP Server
 
-The application runs Playwright MCP itself (`createConnection` from `@playwright/mcp`, connected over an in-memory transport); there is no server to start. Each session gets a freshly launched headless Chromium, whose context (locale from `BROWSER_LOCALE`, see *Locale*) is handed to the server: a fresh profile per session, so consent banners reappear every run and the retry reset works. The application closes that browser with the session, since Playwright MCP leaves a browser it launched itself running when its server closes.
+The application runs Playwright MCP itself (`createConnection` from `@playwright/mcp`, connected over an in-memory transport); there is no server to start. Each session gets a freshly launched Chromium (headless, or headed with `generate --headed`), whose context (locale from the `locale` setting, see *Locale*) is handed to the server: a fresh profile per session, so consent banners reappear every run and the retry reset works. The application closes that browser with the session, since Playwright MCP leaves a browser it launched itself running when its server closes.
 
 The server's configuration is built in code (`mcpConfig()` in `src/extractor/mcp/server.ts`):
 
@@ -273,7 +275,7 @@ The server's configuration is built in code (`mcpConfig()` in `src/extractor/mcp
 | `codegen: "typescript"` | Makes every tool result report the TypeScript statement it ran, which is what the Extractor collects. |
 | `capabilities: ["testing"]` | Adds the `browser_verify_*` assertion tools; without them a verification step has nothing to collect. |
 | `browser.isolated: false` | Use the context the session is given rather than open another one. |
-| `outputDir` | Otherwise the server writes `.playwright-mcp/` into the working directory. |
+| `outputDir` | `.testpilot/.playwright-mcp` under the project root, as an absolute path: Playwright MCP resolves a relative one against the working directory, which may be a project subfolder. |
 
 ## Known Limitations
 
@@ -295,15 +297,30 @@ docs/
 └── ROADMAP.md                      # what is planned next
 examples/                           # sample test-case markdown inputs, grouped by
 |                                     target site (e.g. examples/automation/)
-output/                             # gitignored, per-run generated artifacts
-|                                     (JSON + spec), mirroring examples/'s
-|                                     per-site subfolders
+output/                             # gitignored; this repo's scriptsDir is output/testpilot/
+|                                     (generated specs)
+skills/testpilot/                   # the agent skill: SKILL.md + references/, copied by
+|                                     testpilot init --skills
+.testpilot/                         # config.json (committed); logs/, tests/ and
+|                                     .playwright-mcp/ are gitignored
 prompts/                            # one template per LLM call
 ├── structurer.md
 ├── extractor.md
 ├── validator.md
 └── generator.md
 src/
+├── cli/
+|   ├── cli.ts                      # the testpilot program: commands and exit
+|   |                                 codes
+|   ├── config.ts                   # testpilot config list, config set-azure-openai
+|   ├── doctor.ts                   # testpilot doctor: the setup checks
+|   ├── errors.ts                   # CliExit, UsageError, LogFolderError, fail(),
+|   |                                 failWithCode(), errorCodeFor(), exitCodeFor(),
+|   |                                 loadSettingsOrFail()
+|   ├── generate.ts                 # testpilot generate, the --json result
+|   ├── init.ts                     # testpilot init: creates .testpilot/, installs
+|   |                                 the skill with --skills
+|   └── skills.ts                   # skill destinations, installSkill(), checkSkills()
 ├── extractor/
 |   ├── mcp/
 |   |   ├── constants.ts            # timeouts, allowed and collectable tools,
@@ -324,11 +341,15 @@ src/
 |   ├── retry.ts                    # rate-limit retry wrapper applied to every
 |   |                                 provider
 |   └── provider/                   # concrete LLMProvider implementations
-|       ├── mock.ts
+|       ├── mock.ts                 # test double for the suite
 |       ├── azure-openai.ts
 |       └── openai-chat.ts          # Chat Completions tool-calling conversation
 ├── model/                          # shared JSON-contract schemas
 |   └── test-case.ts                # TestCase, Module, ExecutionStep, StepStatement
+├── runtime/
+|   ├── exceptions.ts               # PipelineError + per-stage subclasses
+|   └── pipeline.ts                 # runPipeline() and the extract-then-validate
+|                                     loop
 ├── structurer/
 |   └── service.ts                  # Structurer: markdown -> structured JSON
 ├── validator/
@@ -338,11 +359,11 @@ src/
 |   |                                 replay
 |   └── utils.ts                    # failure feedback, measured timeouts
 ├── config.ts                       # zod Settings + configureLogging()
-├── exceptions.ts                   # PipelineError + per-stage subclasses
-├── logger.ts                       # levelled, coloured stderr logger
-├── main.ts                         # CLI entrypoint, pipeline wiring and the
-|                                     extract-then-validate loop
+├── error-codes.ts                  # ERROR_CODES: stable error codes, exit codes, hints
+├── logger.ts                       # levelled, coloured stderr logger, per-run log
+|                                     file, lastLineAt()
+├── main.ts                         # the testpilot executable: runs the CLI
 └── prompt-loader.ts                # loadPrompt / renderPrompt
 test/                               # Vitest suite mirroring src/
-playwright.config.ts                # runs the generated specs in output/
+playwright.config.ts                # runs the generated specs in output/testpilot/
 ```

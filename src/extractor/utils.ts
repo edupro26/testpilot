@@ -1,7 +1,7 @@
 /** Helpers for the Extractor: compiling statements, prompt context, collection checks. */
 
-import { ExtractorError } from '../exceptions.ts';
 import type { Module } from '../model/test-case.ts';
+import { ExtractorError } from '../runtime/exceptions.ts';
 
 const AsyncFunction = async function () {
     /* only its constructor is used */
@@ -67,7 +67,7 @@ export function requireStatement(code: string, step: string): void {
                 `on its own -- the tool that emitted it spreads a statement over ` +
                 `several lines and must be removed from COLLECTABLE_TOOLS:\n` +
                 `  ${code}\n  (${String(error)})`,
-            { cause: error },
+            { code: 'INTERNAL_ERROR', cause: error },
         );
     }
 }

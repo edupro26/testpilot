@@ -3,8 +3,8 @@
 import { AzureOpenAI } from 'openai';
 
 import type { Settings } from '../../config.ts';
-import { ConfigurationError } from '../../exceptions.ts';
 import { logger } from '../../logger.ts';
+import { MissingSettingsError } from '../../runtime/exceptions.ts';
 import type {
     CompletionRequest,
     ConversationRequest,
@@ -21,21 +21,21 @@ export class AzureOpenAIProvider implements LLMProvider {
      * Initialize the Azure OpenAI client from settings.
      *
      * @param settings - Application settings containing Azure OpenAI credentials.
-     * @throws {ConfigurationError} If required Azure OpenAI settings are missing.
+     * @throws {MissingSettingsError} If required Azure OpenAI settings are missing.
      */
     constructor(settings: Settings) {
         const {
-            AZURE_OPENAI_ENDPOINT: endpoint,
-            AZURE_OPENAI_API_KEY: apiKey,
-            AZURE_DEPLOYMENT_NAME: deployment,
-            AZURE_MODEL_NAME: model,
-            OPENAI_API_VERSION: apiVersion,
+            TESTPILOT_AZURE_OPENAI_ENDPOINT: endpoint,
+            TESTPILOT_AZURE_OPENAI_API_KEY: apiKey,
+            TESTPILOT_AZURE_DEPLOYMENT_NAME: deployment,
+            TESTPILOT_AZURE_MODEL_NAME: model,
+            TESTPILOT_OPENAI_API_VERSION: apiVersion,
         } = requireSettings({
-            AZURE_OPENAI_ENDPOINT: settings.azureOpenaiEndpoint,
-            AZURE_OPENAI_API_KEY: settings.azureOpenaiApiKey,
-            AZURE_DEPLOYMENT_NAME: settings.azureDeploymentName,
-            AZURE_MODEL_NAME: settings.azureModelName,
-            OPENAI_API_VERSION: settings.openaiApiVersion,
+            TESTPILOT_AZURE_OPENAI_ENDPOINT: settings.azureOpenaiEndpoint,
+            TESTPILOT_AZURE_OPENAI_API_KEY: settings.azureOpenaiApiKey,
+            TESTPILOT_AZURE_DEPLOYMENT_NAME: settings.azureDeploymentName,
+            TESTPILOT_AZURE_MODEL_NAME: settings.azureModelName,
+            TESTPILOT_OPENAI_API_VERSION: settings.openaiApiVersion,
         });
         this.client = new AzureOpenAI({ endpoint, deployment, apiKey, apiVersion });
         this.model = model;
@@ -81,7 +81,7 @@ export class AzureOpenAIProvider implements LLMProvider {
  *
  * @param required - Mapping of env var name to its resolved value.
  * @returns The same mapping, narrowed to strings.
- * @throws {ConfigurationError} If any value in `required` is empty.
+ * @throws {MissingSettingsError} If any value in `required` is empty.
  */
 function requireSettings<K extends string>(
     required: Record<K, string | undefined>,
@@ -89,7 +89,7 @@ function requireSettings<K extends string>(
     const entries = Object.entries(required) as [K, string | undefined][];
     const missing = entries.filter(([, value]) => !value).map(([name]) => name);
     if (missing.length > 0) {
-        throw new ConfigurationError(`Missing required ${missing.join(', ')}`);
+        throw new MissingSettingsError(`Missing required ${missing.join(', ')}`);
     }
     return Object.fromEntries(entries) as Record<K, string>;
 }

@@ -1,10 +1,7 @@
-# Dependencies
-node_modules/
-
-# Environments (.venv: the Python environment of the previous version)
+# dotenv environment variable files
 .env
-.envrc
-.venv/
+.env.*
+!.env.example
 
 # PyCharm / WebStorm
 .idea/
@@ -12,8 +9,8 @@ node_modules/
 # Visual Studio Code
 .vscode/
 
-# Claude
-.claude/settings.local.json
+# MacOS
+.DS_Store
 
 # ESLint / TypeScript caches
 .eslintcache
@@ -26,8 +23,51 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 
-# Generated pipeline artifacts
+# Testpilot artifacts
 .playwright-mcp
 output/
 
-.DS_Store
+# Claude
+.claude/settings.local.json
+.superpowers/
+docs/superpowers/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Dependency directories
+node_modules/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# pnpm
+.pnpm-store
+
+# yarn v3
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# Vite files
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+.vite/
