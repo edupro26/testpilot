@@ -2,8 +2,18 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import {
+    chmod,
+    mkdir,
+    readdir,
+    readFile,
+    rename,
+    unlink,
+    utimes,
+    writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { APIConnectionError } from 'openai';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
@@ -353,6 +363,55 @@ test('Smoke test', async ({ page }) => {
         fakePipeline('not a script');
         expect(await runCli(['generate', 'automation/case.md'])).toBe(1);
         expect(existsSync(lock)).toBe(false);
+    });
+
+    test('a stale reservation is taken over by one run only', async () => {
+        // Two runs that find the same stale lock must not both remove it: the
+        // second would remove the first's new lock, and both would write.
+        const tests = path.join('.testpilot', 'tests');
+        await mkdir(tests, { recursive: true });
+        const { pid } = spawnSync(process.execPath, ['-e', '']);
+        const lock = path.join(tests, 'case.json.lock');
+        const guard = `${lock}.takeover`;
+        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
+        // Another run is taking the lock over.
+        await writeFile(guard, '1');
+
+        const second = runPipeline(SMOKE_SCRIPT, ['--json']);
+        await sleep(200);
+        // It wins: its lock replaces the stale one, then it lets go of the guard.
+        const won = path.join(tests, 'won.lock');
+        await writeFile(
+            won,
+            JSON.stringify({ pid: process.pid, source: 'other/case.md' }),
+        );
+        await rename(won, lock);
+        await unlink(guard);
+
+        expect((await second)[0]).toBe(2);
+        expect(stderr()).toContain(
+            'is being generated from other/case.md by another run ' +
+                `(process ${process.pid})`,
+        );
+        expect(JSON.parse(await readFile(lock, 'utf8'))).toMatchObject({
+            source: 'other/case.md',
+        });
+    });
+
+    test('a takeover left by a run that stopped is cleared', async () => {
+        const tests = path.join('.testpilot', 'tests');
+        await mkdir(tests, { recursive: true });
+        const { pid } = spawnSync(process.execPath, ['-e', '']);
+        const lock = path.join(tests, 'case.json.lock');
+        const guard = `${lock}.takeover`;
+        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
+        await writeFile(guard, String(pid));
+        const past = new Date(Date.now() - 60_000);
+        await utimes(guard, past, past);
+
+        expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
+        expect(existsSync(lock)).toBe(false);
+        expect(existsSync(guard)).toBe(false);
     });
 
     test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(

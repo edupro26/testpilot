@@ -2,6 +2,7 @@
 
 import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { CONFIG_DIR, findProjectRoot, type SettingFlags } from '../config.ts';
 import { ERROR_CODES, type ErrorCode } from '../error-codes.ts';
@@ -71,6 +72,10 @@ async function createLogFile(root: string, stem: string, now: Date): Promise<str
 // than one left behind by a run that stopped before it wrote it.
 const LOCK_WRITE_MS = 5_000;
 
+// How long a run waits before looking again at a stale lock that another run is
+// taking over.
+const TAKEOVER_POLL_MS = 50;
+
 /** Who holds a reservation of a test case's outputs, as its lock file records it. */
 interface OutputHolder {
     /** The holding run's process. */
@@ -86,7 +91,7 @@ interface OutputHolder {
  *
  * The reservation is a lock file next to the JSON, `<stem>.json.lock`, which
  * records the run's process and input. One left behind by a run that no longer
- * exists is taken over.
+ * exists is taken over (see `takeOver`).
  *
  * @param paths - The outputs.
  * @param source - The input, as the outputs' JSON records it.
@@ -133,7 +138,7 @@ async function reserveOutputs(
             );
         }
         try {
-            await removeLock(lock);
+            await takeOver(lock);
         } catch (error) {
             // Retrying would meet the same lock forever.
             throw new OutputConflictError(
@@ -143,6 +148,46 @@ async function reserveOutputs(
                 { cause: error },
             );
         }
+    }
+}
+
+/**
+ * Remove a stale lock, so that the caller can try to create its own.
+ *
+ * Only one run at a time does this, the one that creates the lock's guard,
+ * `<lock>.takeover`; it removes the lock only if it is still stale. Without the
+ * guard, two runs that found the same stale lock could both remove it, the
+ * second removing the first's new lock, and both would go on to write the
+ * outputs. A run that finds the guard taken waits, then looks at the lock
+ * again; a guard older than `LOCK_WRITE_MS` was left by a run that stopped
+ * while taking over, and is removed.
+ *
+ * @param lock - The lock file, found stale.
+ * @throws {NodeJS.ErrnoException} What kept the guard from being created or
+ *   removed, or the lock from being read or removed.
+ */
+async function takeOver(lock: string): Promise<void> {
+    const guard = `${lock}.takeover`;
+    try {
+        await writeFile(guard, String(process.pid), { flag: 'wx' });
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+            throw error;
+        }
+        const taken = await stat(guard).catch(() => undefined);
+        if (taken !== undefined && Date.now() - taken.mtimeMs >= LOCK_WRITE_MS) {
+            await removeLock(guard);
+        } else {
+            await sleep(TAKEOVER_POLL_MS);
+        }
+        return;
+    }
+    try {
+        if ((await lockHolder(lock)) === 'stale') {
+            await removeLock(lock);
+        }
+    } finally {
+        await removeLock(guard);
     }
 }
 
