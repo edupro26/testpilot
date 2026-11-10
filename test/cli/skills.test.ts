@@ -46,7 +46,7 @@ test.each([
     );
 });
 
-test('a re-install replaces the copy, dropping files the source no longer has', async () => {
+test('a re-install replaces the copy, dropping files the source lost', async () => {
     const destination = path.join(cwd, '.agents/skills/testpilot');
     expect(await installSkill(destination, source)).toBe('installed');
     await writeFile(path.join(destination, 'stale.md'), 'old');
@@ -133,7 +133,7 @@ test('an extra file in the copy makes it differ', async () => {
     expect(await sameSkill(dir, source)).toBe(false);
 });
 
-test('a missing file in the copy makes it differ, and an identical copy is the same', async () => {
+test('a copy missing a file differs, and an identical copy is the same', async () => {
     const dir = skillDir({ agent: 'claude', global: false }, { cwd, home });
     await installSkill(dir, source);
     expect(await sameSkill(dir, source)).toBe(true);

@@ -1,7 +1,7 @@
 /** Tests for the generate command: the pipeline's wiring, run offline. */
 
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { APIConnectionError } from 'openai';
@@ -240,9 +240,37 @@ test('Smoke test', async ({ page }) => {
         expect(logFilePath('/p', 'login', now)).toBe(
             path.join('/p', '.testpilot', 'logs', '2026-11-07_09-05-03-login.log'),
         );
+        expect(logFilePath('/p', 'login', now, 2)).toBe(
+            path.join('/p', '.testpilot', 'logs', '2026-11-07_09-05-03_2-login.log'),
+        );
     });
 
-    test('outputPaths puts the spec in scriptsDir and the JSON in .testpilot/tests', () => {
+    test('runs that start in the same second get a log each', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            vi.setSystemTime(new Date(2026, 10, 7, 9, 5, 3));
+            expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
+            const firstRun = stdout().length;
+            fakePipeline(SMOKE_SCRIPT);
+
+            expect(await runCli(['generate', 'automation/case.md', '--json'])).toBe(0);
+
+            const second = path.resolve(logFilePath('.', 'case', new Date(), 2));
+            expect(JSON.parse(stdout().slice(firstRun))).toMatchObject({
+                log: second,
+            });
+            expect((await readdir('.testpilot/logs')).sort()).toEqual([
+                '2026-11-07_09-05-03-case.log',
+                '2026-11-07_09-05-03_2-case.log',
+            ]);
+            const log = await readFile(second, 'utf8');
+            expect(log.match(/Log: /g)).toHaveLength(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test('outputPaths puts the spec in scriptsDir, the JSON in .testpilot', () => {
         expect(outputPaths('cases/login.md', '/p', 'e2e/testpilot')).toEqual({
             spec: path.resolve('/p/e2e/testpilot/login.spec.ts'),
             testCase: path.resolve('/p/.testpilot/tests/login.json'),
@@ -252,7 +280,7 @@ test('Smoke test', async ({ page }) => {
         );
     });
 
-    test('an input with the name of another one is refused before the run', async () => {
+    test('an input named like another one is refused before the run', async () => {
         expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
         const json = path.join('.testpilot', 'tests', 'case.json');
         const before = await readFile(json, 'utf8');
@@ -286,30 +314,33 @@ test('Smoke test', async ({ page }) => {
         expect(await runCli(['generate', 'case.md'])).toBe(0);
     });
 
-    test('a log file that cannot be created is a warning, and no log is reported', async () => {
-        vi.useFakeTimers({ toFake: ['Date'] });
-        try {
-            vi.setSystemTime(new Date(2026, 10, 7, 9, 5, 3));
-            // A folder where the log file goes.
-            await mkdir(logFilePath('.', 'case', new Date()), { recursive: true });
+    test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+        'a log file that cannot be created is a warning, and no log is reported',
+        async () => {
+            const logs = path.join('.testpilot', 'logs');
+            await mkdir(logs, { recursive: true });
+            await chmod(logs, 0o555);
+            try {
+                const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json']);
 
-            const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json']);
+                expect(exitCode).toBe(0);
+                expect(JSON.parse(stdout())).toMatchObject({
+                    status: 'success',
+                    log: null,
+                });
+                expect(stderr()).toContain(
+                    `Cannot create a log file in ${logs}, so this run has none: EACCES`,
+                );
+                expect(stderr()).not.toContain('Log: ');
 
-            expect(exitCode).toBe(0);
-            expect(JSON.parse(stdout())).toMatchObject({
-                status: 'success',
-                log: null,
-            });
-            expect(stderr()).toContain('Cannot create the log file');
-            expect(stderr()).not.toContain('Log: ');
-
-            fakePipeline(SMOKE_SCRIPT);
-            expect(await runCli(['generate', 'automation/case.md'])).toBe(0);
-            expect(stdout()).toContain('log: (none)\n');
-        } finally {
-            vi.useRealTimers();
-        }
-    });
+                fakePipeline(SMOKE_SCRIPT);
+                expect(await runCli(['generate', 'automation/case.md'])).toBe(0);
+                expect(stdout()).toContain('log: (none)\n');
+            } finally {
+                await chmod(logs, 0o755);
+            }
+        },
+    );
 
     test('each run writes a log file, and prints its path', async () => {
         const [exitCode] = await runPipeline(SMOKE_SCRIPT);
@@ -358,7 +389,7 @@ test('Smoke test', async ({ page }) => {
         });
     });
 
-    test('from a project subfolder, the input is relative to it and outputs go under the root', async () => {
+    test('from a subfolder, the input is relative to it, outputs to root', async () => {
         const root = process.cwd();
         await mkdir('cases');
         await mkdir('src');
@@ -484,7 +515,7 @@ test('Smoke test', async ({ page }) => {
         }
     }
 
-    test('a step quiet for 10 seconds, over several turns, logs a heartbeat', async () => {
+    test('a step quiet for 10 s over several turns logs a heartbeat', async () => {
         // No single turn takes 10 s, but the run must not look stuck.
         expect(await runSlowStep(() => undefined)).toBe(0);
 
@@ -521,7 +552,7 @@ test('Smoke test', async ({ page }) => {
         expect(heartbeats).toHaveLength(2);
     });
 
-    test('the code and hint of a failure are logged whatever the log level', async () => {
+    test('the failure code and hint are logged whatever the log level', async () => {
         const [exitCode] = await runPipeline(
             SMOKE_SCRIPT,
             ['--log-level=critical'],
@@ -631,7 +662,7 @@ test('Smoke test', async ({ page }) => {
         expect(stderr()).toContain(`Hint: ${ERROR_CODES.STEP_OUT_OF_TURNS.hint}`);
     });
 
-    test('an LLM connection failure mid-extraction keeps its stage and step', async () => {
+    test('an LLM connection failure mid-step keeps its stage and step', async () => {
         const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json'], () => {
             fakes.runStep = vi
                 .fn<NonNullable<typeof fakes.runStep>>()

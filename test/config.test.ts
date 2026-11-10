@@ -125,7 +125,7 @@ test('the API key is read from the environment only', async () => {
     expect(() => loadSettings({}, root)).toThrow(/TESTPILOT_AZURE_OPENAI_API_KEY/);
 });
 
-test('a broken config.json is a ConfigurationError naming the file and key', async () => {
+test('a broken config.json is a ConfigurationError naming file and key', async () => {
     for (const [config, pattern] of [
         ['{ not json', /config\.json/],
         [{ maxTurn: 5 }, /maxTurn/],
@@ -242,7 +242,7 @@ test.each(['apiKey', 'azureOpenAIApiKey', 'TESTPILOT_AZURE_OPENAI_API_KEY', 'api
     },
 );
 
-test('readConfigObject returns the object, or undefined for a missing file', async () => {
+test('readConfigObject returns the object, or undefined with no file', async () => {
     const root = await project({ config: { locale: 'pt-PT' } });
     const file = path.join(root, '.testpilot', 'config.json');
     expect(await readConfigObject(file)).toEqual({ locale: 'pt-PT' });
@@ -264,7 +264,7 @@ test.each([
     });
 });
 
-test('readConfigObject never keeps a JSON syntax error, which quotes the file', async () => {
+test('readConfigObject drops a JSON syntax error, which quotes the file', async () => {
     const root = await project({
         config: '{ "azureOpenAI": { "apiKey": sk-SECRET1 } }',
     });

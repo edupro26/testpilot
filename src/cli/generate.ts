@@ -1,6 +1,6 @@
 /** `testpilot generate`: turn a markdown test case into a Playwright script. */
 
-import { appendFile, mkdir, stat } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { CONFIG_DIR, findProjectRoot, type SettingFlags } from '../config.ts';
@@ -31,13 +31,40 @@ import {
  * @param root - The project root.
  * @param stem - The input's name without its extension.
  * @param now - The run's start, in local time.
- * @returns `<root>/.testpilot/logs/<YYYY-MM-DD_HH-MM-SS>-<stem>.log`.
+ * @param run - Which of the runs of `stem` that started in the same second
+ *   this is; 1 by default.
+ * @returns `<root>/.testpilot/logs/<YYYY-MM-DD_HH-MM-SS>-<stem>.log`, with
+ *   `_<run>` after the time from the second run on.
  */
-export function logFilePath(root: string, stem: string, now: Date): string {
+export function logFilePath(root: string, stem: string, now: Date, run = 1): string {
     const pad = (value: number): string => String(value).padStart(2, '0');
-    const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    const time = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-    return path.join(root, CONFIG_DIR, 'logs', `${date}_${time}-${stem}.log`);
+    const date = [now.getFullYear(), pad(now.getMonth() + 1), pad(now.getDate())];
+    const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map(pad);
+    const start = `${date.join('-')}_${time.join('-')}${run === 1 ? '' : `_${run}`}`;
+    return path.join(root, CONFIG_DIR, 'logs', `${start}-${stem}.log`);
+}
+
+/**
+ * Create a run's log file, empty, under a name no other run has taken.
+ *
+ * @param root - The project root.
+ * @param stem - The input's name without its extension.
+ * @param now - The run's start, in local time.
+ * @returns The file's path; see `logFilePath`.
+ * @throws {NodeJS.ErrnoException} What kept the file from being created.
+ */
+async function createLogFile(root: string, stem: string, now: Date): Promise<string> {
+    for (let run = 1; ; run++) {
+        const file = logFilePath(root, stem, now, run);
+        try {
+            await writeFile(file, '', { flag: 'wx' });
+            return file;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+                throw error;
+            }
+        }
+    }
 }
 
 /** The flags of `testpilot generate`, as commander parses them. */
@@ -158,8 +185,8 @@ const QUIET_LIMIT_MS = 10_000;
  * without one, so a long run never looks stuck: `Waiting for <stage> to
  * finish: step <i> of <n>, "<step>" (<s>s)` while a step is extracted, else
  * without the step number or the step, where `<s>` is the time since the last
- * line that was not the watchdog's. A line comes at most `QUIET_LIMIT_MS` plus one tick (15 seconds)
- * after the last.
+ * line that was not the watchdog's. A line comes at most `QUIET_LIMIT_MS` plus
+ * one tick (15 seconds) after the last.
  *
  * @param progress - The stage and step under way, named in the line.
  * @returns The timer; clear it when the run ends.
@@ -290,31 +317,30 @@ async function generate(
     }
     run.paths = paths;
     const stem = path.basename(input, path.extname(input));
-    const logFile = logFilePath(root, stem, new Date());
-    const logLine = `Log: ${shown(logFile)}`;
+    const now = new Date();
+    const logDir = path.dirname(logFilePath(root, stem, now));
 
     try {
-        await mkdir(path.dirname(logFile), { recursive: true });
+        await mkdir(logDir, { recursive: true });
     } catch (error) {
         const message =
-            `Cannot create the log folder ${path.dirname(logFile)}: ` +
-            errorMessage(error);
+            `Cannot create the log folder ${logDir}: ` + errorMessage(error);
         failWithCode(message, new LogFolderError(message, { cause: error }));
     }
     // Created before the run, so that a run reports a log only if it has one.
     try {
-        await appendFile(logFile, '');
-        setLogFile(logFile);
-        run.log = logFile;
+        run.log = await createLogFile(root, stem, now);
+        setLogFile(run.log);
     } catch (error) {
         logger.warning(
-            `Cannot create the log file ${shown(logFile)}, so this run has none: ` +
+            `Cannot create a log file in ${shown(logDir)}, so this run has none: ` +
                 errorMessage(error),
         );
     }
+    const logLine = run.log === undefined ? undefined : `Log: ${shown(run.log)}`;
     const watchdog = watchProgress(run.progress);
     try {
-        if (run.log !== undefined) {
+        if (logLine !== undefined) {
             logger.always(logLine);
         }
         await runPipeline(input, settings, {
@@ -328,7 +354,7 @@ async function generate(
         failWithCode(errorMessage(error), error);
     } finally {
         clearInterval(watchdog);
-        if (run.log !== undefined) {
+        if (logLine !== undefined) {
             logger.always(logLine);
         }
         setLogFile(undefined);

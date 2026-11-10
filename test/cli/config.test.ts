@@ -18,6 +18,7 @@ import {
     readHiddenInput,
     updateDotenv,
 } from '../../src/cli/config.ts';
+import { resolveSettings } from '../../src/config.ts';
 import {
     stderr,
     stdout,
@@ -88,8 +89,23 @@ test('updateDotenv replaces in place and keeps everything else', () => {
             TESTPILOT_AZURE_MODEL_NAME: 'gpt 5',
         }),
     ).toBe(
-        '# mine\r\nAPP=1\r\nexport TESTPILOT_AZURE_OPENAI_ENDPOINT=https://new/\r\nZ=2' +
-            '\r\nTESTPILOT_AZURE_MODEL_NAME="gpt 5"\r\n',
+        '# mine\r\nAPP=1\r\n' +
+            'export TESTPILOT_AZURE_OPENAI_ENDPOINT=https://new/\r\nZ=2\r\n' +
+            'TESTPILOT_AZURE_MODEL_NAME="gpt 5"\r\n',
+    );
+});
+
+test('updateDotenv replaces a name in any case, so the new value is read', async () => {
+    const before =
+        'testpilot_azure_openai_endpoint=https://old/\n' +
+        'Testpilot_Azure_Openai_Endpoint=https://older/\n';
+    const after = updateDotenv(before, {
+        TESTPILOT_AZURE_OPENAI_ENDPOINT: 'https://new/',
+    });
+    expect(after).toBe('TESTPILOT_AZURE_OPENAI_ENDPOINT=https://new/\n'.repeat(2));
+    await writeFile('.env.local', after);
+    expect(resolveSettings({}, process.cwd()).settings.azureOpenaiEndpoint).toBe(
+        'https://new/',
     );
 });
 
@@ -178,7 +194,7 @@ test('values go to config.json, other keys kept', async () => {
     expect(stderr()).toBe('');
 });
 
-test('config.json is created, indented by 4, and earlier Azure values are kept', async () => {
+test('config.json is created indented by 4, keeping earlier Azure values', async () => {
     await configSetAzureOpenAICommand({ deploymentName: 'd1', apiVersion: 'v1' });
     await configSetAzureOpenAICommand({ deploymentName: 'd2' });
     expect(await readFile('.testpilot/config.json', 'utf8')).toBe(
@@ -193,7 +209,7 @@ test('config.json is created, indented by 4, and earlier Azure values are kept',
     );
 });
 
-test('--prompt-api-key writes only the key to .env.local, and never prints it', async () => {
+test('--prompt-api-key writes only the key to .env.local, never printed', async () => {
     await writeFile('.env.local', 'APP_SECRET=keep\n');
     await configSetAzureOpenAICommand(
         { promptApiKey: true },
@@ -233,7 +249,7 @@ test.skipIf(process.platform === 'win32')(
     },
 );
 
-test('--save=dotenv:<path> writes the values there too, relative to the working directory', async () => {
+test('--save=dotenv:<path> writes there too, relative to the cwd', async () => {
     await mkdir('sub');
     process.chdir('sub');
     await configSetAzureOpenAICommand(
@@ -241,7 +257,8 @@ test('--save=dotenv:<path> writes the values there too, relative to the working 
         { isInteractive: () => true, readSecret: () => Promise.resolve('sk-1') },
     );
     expect(await readFile('local.env', 'utf8')).toBe(
-        'TESTPILOT_AZURE_OPENAI_ENDPOINT=https://x/\nTESTPILOT_AZURE_OPENAI_API_KEY=sk-1\n',
+        'TESTPILOT_AZURE_OPENAI_ENDPOINT=https://x/\n' +
+            'TESTPILOT_AZURE_OPENAI_API_KEY=sk-1\n',
     );
     expect(existsSync('../.env.local')).toBe(false);
     expect(
@@ -256,7 +273,7 @@ test('--save=dotenv:<path> writes the values there too, relative to the working 
     );
 });
 
-test('a value a stronger source overrides is written, with a warning naming the source', async () => {
+test('an overridden value is written, with a warning naming the source', async () => {
     await writeFile(
         '.env.local',
         'TESTPILOT_AZURE_OPENAI_ENDPOINT=https://old-host/\n',
@@ -316,7 +333,8 @@ test('--prompt-api-key without a terminal exits 2 and writes nothing', async () 
     ).rejects.toMatchObject({ exitCode: 2 });
     expect(existsSync('.testpilot/config.json')).toBe(false);
     expect(stderr()).toContain(
-        '--prompt-api-key needs an interactive terminal; run this command in your own terminal',
+        '--prompt-api-key needs an interactive terminal; ' +
+            'run this command in your own terminal',
     );
 });
 
@@ -458,7 +476,7 @@ test('readHiddenInput rejects on Ctrl+C with exit 2', async () => {
     expectRestored(terminal);
 });
 
-test('readHiddenInput restores the terminal when the stream ends or fails', async () => {
+test('readHiddenInput restores the terminal when input ends or fails', async () => {
     const ended = readFrom('ab');
     ended.terminal.emitter.emit('end');
     expect(await ended.result).toBe('ab');

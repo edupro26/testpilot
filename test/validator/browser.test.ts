@@ -93,7 +93,7 @@ test('times each statement, so late content is measured, not failed', async () =
     expect(durations[1]).toBeGreaterThanOrEqual(400);
 });
 
-test('a Chromium that cannot launch is a BrowserLaunchError, with its cause', async () => {
+test('a Chromium that cannot launch is a BrowserLaunchError with a cause', async () => {
     const cause = new Error('Executable does not exist');
     const launch = vi.spyOn(chromium, 'launch').mockRejectedValueOnce(cause);
     try {

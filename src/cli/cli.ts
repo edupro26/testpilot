@@ -43,10 +43,10 @@ export function buildProgram(): Command {
         .command('generate')
         .summary('generate a Playwright script from a markdown test case')
         .description(
-            'Run the full pipeline on a markdown test case and persist its output.\n\n' +
-                'Writes the generated script to the scripts folder (scriptsDir), the ' +
-                'validated test case JSON to .testpilot/tests/, and a log of the run ' +
-                'to .testpilot/logs/.',
+            'Run the full pipeline on a markdown test case and persist its ' +
+                'output.\n\nWrites the generated script to the scripts folder ' +
+                '(scriptsDir), the validated test case JSON to .testpilot/tests/, ' +
+                'and a log of the run to .testpilot/logs/.',
         )
         .argument('<markdown_path>', 'the markdown test case specification')
         .option('--headed', 'show the browser the agent drives')

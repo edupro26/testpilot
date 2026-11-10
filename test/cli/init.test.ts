@@ -66,6 +66,10 @@ test('readTestDir reads a literal and nothing else', () => {
     expect(readTestDir('export default defineConfig({})')).toBeUndefined();
     expect(readTestDir("testDir: path.join(__dirname, 'e2e')")).toBeUndefined();
     expect(readTestDir('testDir: `${root}/e2e`')).toBeUndefined();
+    expect(readTestDir("testDir: './e2e' + '/smoke',")).toBeUndefined();
+    expect(readTestDir("testDir: 'e2e'.concat('/smoke')")).toBeUndefined();
+    expect(readTestDir("{ testDir: 'e2e' }")).toBe('e2e');
+    expect(readTestDir("testDir: 'e2e' // the specs\n,")).toBe('e2e');
 });
 
 test('readTestDir skips comments but not URLs', () => {
@@ -141,7 +145,7 @@ test('a config that is not valid JSON is left for the developer to fix', async (
     );
 });
 
-test('a config that is JSON but not an object is left as is, not crashed on', async () => {
+test('JSON that is not an object in the config is left as is, no crash', async () => {
     for (const text of ['null', '[1, 2]', '"abc"']) {
         const cwd = await project();
         await mkdir(path.join(cwd, '.testpilot'));
@@ -184,6 +188,12 @@ test('without a literal testDir the scripts go to testpilot/', async () => {
     expect(JSON.parse(await readConfig(computed))).toEqual({ scriptsDir: 'testpilot' });
     expect(printed()).toContain('! Could not read testDir from playwright.config.ts');
 
+    stdout.mockClear();
+    const joined = await project("export default { testDir: './e2e' + '/smoke' };");
+    await initCommand({ cwd: joined, checks: checks() });
+    expect(JSON.parse(await readConfig(joined))).toEqual({ scriptsDir: 'testpilot' });
+    expect(printed()).toContain('! Could not read testDir from playwright.config.ts');
+
     const unset = await project('export default {};');
     await initCommand({ cwd: unset, checks: checks() });
     expect(JSON.parse(await readConfig(unset))).toEqual({ scriptsDir: 'testpilot' });
@@ -199,7 +209,7 @@ test('init --skills installs the skill even when a check fails', async () => {
     expect(printed()).toContain('installed .agents/skills/testpilot/');
 });
 
-test('init --skills installs the skill and sets the project up when checks pass', async () => {
+test('init --skills installs the skill and sets up a passing project', async () => {
     const cwd = await project();
     await initCommand({ cwd, checks: checks(), skills: 'claude' });
     expect(existsSync(path.join(cwd, '.claude/skills/testpilot/SKILL.md'))).toBe(true);

@@ -85,7 +85,9 @@ export function formatSettings(loaded: LoadedSettings): string {
     const valueWidth = Math.max(...rows.map(({ value }) => value.length));
     return rows
         .map(({ name, value, source }) =>
-            `${name.padEnd(nameWidth)}  ${value.padEnd(valueWidth)}  ${source}`.trimEnd(),
+            [name.padEnd(nameWidth), value.padEnd(valueWidth), source]
+                .join('  ')
+                .trimEnd(),
         )
         .join('\n');
 }
@@ -132,10 +134,12 @@ export function parseSave(value: string): string {
  * Set variables in a dotenv file's text.
  *
  * An existing `KEY=` assignment (optionally `export KEY=`, optionally indented)
- * is replaced in place, a quoted value that spans lines included; keys that are
- * missing are appended. A line inside another variable's quoted value is part of
- * that value, never an assignment. Everything else is kept byte for byte, and
- * the file's line ending is kept.
+ * is replaced in place, a quoted value that spans lines included. So is every
+ * assignment whose key differs only in case, since settings are read whatever
+ * the case of their name; the key is spelled as in `values`. Keys that are
+ * missing are appended. A line inside another variable's quoted value is part
+ * of that value, never an assignment. Everything else is kept byte for byte,
+ * and the file's line ending is kept.
  *
  * @param text - The file's current content; empty if there is none.
  * @param values - The variables to set.
@@ -146,9 +150,10 @@ export function parseSave(value: string): string {
  */
 export function updateDotenv(text: string, values: Record<string, string>): string {
     const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    // By the name in capitals: settings are read whatever the case of the name.
     const lines = new Map(
         Object.entries(values).map(([key, value]) => [
-            key,
+            key.toUpperCase(),
             `${key}=${quote(key, value)}`,
         ]),
     );
@@ -156,11 +161,11 @@ export function updateDotenv(text: string, values: Record<string, string>): stri
     let result = '';
     let kept = 0;
     for (const { lead, key, start, end } of dotenvAssignments(text)) {
-        const line = lines.get(key);
+        const line = lines.get(key.toUpperCase());
         if (line !== undefined) {
             result += `${text.slice(kept, start)}${lead}${line}`;
             kept = end;
-            replaced.add(key);
+            replaced.add(key.toUpperCase());
         }
     }
     result += text.slice(kept);
@@ -436,7 +441,10 @@ interface Write {
     note: string;
     /** Whether the file may hold the key, so is created readable by its owner only. */
     private?: boolean;
-    /** Whether the key is written: an existing file is restricted to its owner first. */
+    /**
+     * Whether the key is written: an existing file is first restricted to its
+     * owner.
+     */
     holdsKey?: boolean;
     /** The settings source the file is; `undefined` for one testpilot never reads. */
     source: SettingSource | undefined;

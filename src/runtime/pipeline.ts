@@ -272,14 +272,8 @@ class ExtractionRun {
     /** Have the agent perform a step from where its browser is, judging each report. */
     private extract(ref: StepRef, feedback?: string): Promise<StepResult> {
         const step = this.text(ref);
-        const refs = this.refs();
         this.progress.stage = 'extract';
-        this.progress.step = step;
-        this.progress.stepNumber =
-            refs.findIndex(
-                (other) => other.module === ref.module && other.step === ref.step,
-            ) + 1;
-        this.progress.stepCount = refs.length;
+        this.locate(ref);
         const history = placeStatements(this.working, ref).map(
             ({ statement }) => statement.code,
         );
@@ -299,15 +293,28 @@ class ExtractionRun {
         });
     }
 
+    /** Name `ref` as the step under way in the progress. */
+    private locate(ref: StepRef): void {
+        const refs = this.refs();
+        this.progress.step = this.text(ref);
+        this.progress.stepNumber =
+            refs.findIndex(
+                (other) => other.module === ref.module && other.step === ref.step,
+            ) + 1;
+        this.progress.stepCount = refs.length;
+    }
+
     /**
      * Re-extract a step with feedback until the judge accepts it; a restore
      * that breaks at an earlier step re-extracts that step first.
      *
-     * @throws {ValidatorError} If the retries run out.
+     * @throws {ValidatorError} If the retries run out; the progress names `ref`.
      */
     private async redo(ref: StepRef, feedback: string): Promise<void> {
         for (;;) {
             if (this.retries === 0) {
+                // Repairing an earlier step may have left the progress on it.
+                this.locate(ref);
                 throw new ValidatorError(
                     `Step ${JSON.stringify(this.text(ref))} still failing, and ` +
                         `the run's ${MAX_RETRIES} retries are spent. Last ` +
@@ -317,9 +324,8 @@ class ExtractionRun {
             }
             const broken = await this.restore(ref);
             if (broken !== undefined) {
-                logger.warning(
-                    `Restoring the browser failed at step ${JSON.stringify(this.text(broken.ref))}`,
-                );
+                const step = JSON.stringify(this.text(broken.ref));
+                logger.warning(`Restoring the browser failed at step ${step}`);
                 await this.redo(broken.ref, broken.feedback);
                 continue;
             }

@@ -270,7 +270,7 @@ describe('extractAndValidate', () => {
             ]);
         });
 
-        test('a failing replay names its step; its re-extraction moves back to extract', async () => {
+        test('a failing replay names its step; its redo is extract', async () => {
             const run = progress();
             const fake = stages([], []);
             const seen: RunProgress[] = [];
@@ -326,6 +326,42 @@ describe('extractAndValidate', () => {
 
             // The budget runs out inside `redo`, after the replay failed.
             expect(run.step).toBe('Open');
+        });
+
+        test('names its step when an earlier repair spends the retries', async () => {
+            // Re-extracting module 1's step spends all but one retry; the next
+            // restore breaks at "Log in", whose repair spends the last one.
+            const run = progress();
+            const rejected = { statements: statements(ASSERT), rejection: 'no' };
+            const fake = stages(
+                [
+                    statements(GOTO),
+                    statements(CLICK),
+                    statements(ASSERT),
+                    ...Array.from({ length: MAX_RETRIES - 1 }, () => rejected),
+                    statements(CLICK),
+                ],
+                [{ ref: { module: 1, step: 0 }, feedback: 'not visible' }],
+            );
+            for (let i = 1; i < MAX_RETRIES; i++) {
+                fake.mcp.run.mockResolvedValueOnce([]);
+            }
+            fake.mcp.run.mockRejectedValueOnce(
+                new BrowserError(CLICK, 'Timeout 30000ms exceeded', [10]),
+            );
+
+            const error = await extractAndValidate(
+                testCase(['Open', 'Log in'], ['See the welcome']),
+                fake,
+                run,
+            ).catch((e: unknown) => e);
+
+            expect(String(error)).toContain('"See the welcome" still failing');
+            expect(run).toMatchObject({
+                step: 'See the welcome',
+                stepNumber: 3,
+                stepCount: 3,
+            });
         });
     });
 });

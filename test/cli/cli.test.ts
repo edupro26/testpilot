@@ -24,7 +24,7 @@ describe('runCli exit codes', () => {
         expect(await runCli(argv)).toBe(code);
     });
 
-    test('an unknown agent for --skills lists every agent, the default first', async () => {
+    test('an unknown --skills agent lists every agent, the default first', async () => {
         expect(await runCli(['init', '--skills=cursor'])).toBe(2);
         expect(stderr()).toContain(
             "unknown agent 'cursor' for --skills; use agents, copilot or claude",

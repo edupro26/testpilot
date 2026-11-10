@@ -159,7 +159,7 @@ testpilot generate <path.md> \
 - `--headed` shows the browser the agent drives. It reaches only the Playwright MCP browser; the validation browser stays headless.
 - `--out`, `--max-turns`, `--locale` and `--log-level` override `scriptsDir`, `maxTurns`, `locale` and `logLevel` for this run, and beat every other settings source. `--out` resolves against the working directory; an invalid value exits with `2` naming the flag (`--max-turns (from flag): ...`).
 - `--json` prints one result object on stdout instead of the three paths, for success and failure alike (the object is described in the README's Usage).
-- The spec goes to the scripts folder (`scriptsDir`), the validated JSON to `.testpilot/tests/` and the log to `.testpilot/logs/`, all named after the input file; the log's name starts with the run's local start time (`<YYYY-MM-DD_HH-MM-SS>-<stem>.log`). On success stdout gets `spec:`, `test case:` and `log:` lines, relative to the working directory. This repo sets `scriptsDir` to `output/testpilot` in its own `.testpilot/config.json`, which `playwright.config.ts` (`testDir: './output'`) covers.
+- The spec goes to the scripts folder (`scriptsDir`), the validated JSON to `.testpilot/tests/` and the log to `.testpilot/logs/`, all named after the input file; the log's name starts with the run's local start time (`<YYYY-MM-DD_HH-MM-SS>-<stem>.log`, with `_2`, `_3`, … after the time when a run of the same input started in the same second). On success stdout gets `spec:`, `test case:` and `log:` lines, relative to the working directory. This repo sets `scriptsDir` to `output/testpilot` in its own `.testpilot/config.json`, which `playwright.config.ts` (`testDir: './output'`) covers.
 
 **Built for agents.** Every command:
 

@@ -64,7 +64,7 @@ export class ConfigurationError extends Error {
     }
 }
 
-/** Raised when `config.json` holds an API key, which is only read from the environment. */
+/** Raised when `config.json` holds an API key, read only from the environment. */
 export class ApiKeyInConfigError extends ConfigurationError {
     override name = 'ApiKeyInConfigError';
 }

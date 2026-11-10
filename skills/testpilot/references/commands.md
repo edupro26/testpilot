@@ -70,8 +70,9 @@ Then act on each fix as the table above says:
 Sets testpilot up in this project. It runs the same checks as `doctor` and prints
 them. If they pass (the LLM settings may still be missing), it creates `.testpilot/`
 with `config.json` (holding `scriptsDir`, the folder generated scripts go to, read
-from the project's Playwright `testDir`) and a `.gitignore` for the files testpilot
-writes as it runs. It only adds what is missing: an existing `.gitignore` is kept,
+from the project's Playwright `testDir` when that is a single string; otherwise it
+prints a `!` line asking to check `scriptsDir`) and a `.gitignore` for the files
+testpilot writes as it runs. It only adds what is missing: an existing `.gitignore` is kept,
 and an existing `config.json` keeps every key, `scriptsDir` included if already set
 (when it is not, `init` adds it). If a check other than the LLM settings fails, it
 does not create `.testpilot/` and exits `2`: relay the failures as for `doctor`, and

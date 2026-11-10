@@ -81,7 +81,7 @@ test("the project's Playwright: missing fails, older warns, same passes", async 
     ).toBe('ok');
 });
 
-test('a declared but uninstalled Playwright needs npm install, not a new scaffold', async () => {
+test('an uninstalled Playwright needs npm install, not a scaffold', async () => {
     const root = await emptyDir();
     await writeFile(
         path.join(root, 'package.json'),
@@ -116,7 +116,7 @@ test('a playwright.config of any extension is found', async () => {
     expect(checkPlaywrightConfig(root).status).toBe('ok');
 });
 
-test('LLM settings: configured Azure passes, unconfigured fails naming what is missing', async () => {
+test('LLM settings: set Azure passes, unset fails naming what is missing', async () => {
     const root = await emptyDir();
     expect(checkLlmSettings(AZURE_ENV, root)).toMatchObject({
         status: 'ok',

@@ -25,8 +25,9 @@ const GITIGNORE_FILE = path.join(CONFIG_DIR, '.gitignore');
 /** What testpilot writes as it runs; never committed. */
 const GITIGNORE = ['logs/', 'tests/', '.playwright-mcp/'].join('\n') + '\n';
 
-// `testDir: '<path>'`, with any quote style; a template with `${` is not a literal.
-const TEST_DIR = /\btestDir\s*:\s*(['"`])((?:(?!\1|\$\{).)*)\1/;
+// `testDir: '<path>'`, with any quote style, ending the property: a template with
+// `${`, or a literal that is only the start of an expression, is not the folder.
+const TEST_DIR = /\btestDir\s*:\s*(['"`])((?:(?!\1|\$\{).)*)\1(?=\s*(?:[,}]|$))/;
 
 // A string, a line comment or a block comment, in the order a scan meets them, so a
 // `//` inside a string (`'http://localhost'`) is part of that string.
@@ -39,7 +40,8 @@ const STRINGS_AND_COMMENTS =
  * Comments are ignored.
  *
  * @param configText - The config file's source.
- * @returns The literal, or `undefined` if there is none.
+ * @returns The literal, or `undefined` if there is none, or the value is more
+ *   than one literal, such as `'./e2e' + '/smoke'`.
  */
 export function readTestDir(configText: string): string | undefined {
     return TEST_DIR.exec(stripComments(configText))?.[2];

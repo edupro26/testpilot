@@ -22,7 +22,7 @@ describe('setLogFile', () => {
         return path.join(await mkdtemp(path.join(tmpdir(), 'testpilot-log-')), 'x.log');
     }
 
-    test('appends each line, plain, with error stacks, at the same threshold', async () => {
+    test('appends each line plain, with stacks, at the same threshold', async () => {
         const file = await newLogFile();
         setLogFile(file);
 
