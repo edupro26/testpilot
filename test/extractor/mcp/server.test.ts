@@ -127,6 +127,7 @@ describe('PlaywrightMCP', () => {
         ).catch((e: unknown) => e);
 
         expect(error).toBeInstanceOf(McpError);
+        expect((error as McpError).code).toBe('BROWSER_AGENT_FAILED');
         expect(String(error)).toMatch(
             /missing expected tool\(s\): browser_verify_value/,
         );

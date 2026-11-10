@@ -32,6 +32,9 @@ test('run raises StructurerError for a bad LLM response', async () => {
     const notJson = new Structurer(new MockProvider('not valid json'));
     await expect(notJson.run('# Some test case')).rejects.toThrow(StructurerError);
     await expect(notJson.run('# Some test case')).rejects.toThrow(/not valid JSON/);
+    await expect(notJson.run('# Some test case')).rejects.toMatchObject({
+        code: 'LLM_RESPONSE_INVALID',
+    });
 
     const wrongShape = new Structurer(
         new MockProvider(JSON.stringify({ unexpected: 'shape' })),

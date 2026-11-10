@@ -4,6 +4,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { CONFIG_DIR, findProjectRoot, type SettingFlags } from '../config.ts';
+import { ERROR_CODES, type ErrorCode } from '../error-codes.ts';
 import { lastLineAt, logger, setLogFile } from '../logger.ts';
 import { errorMessage } from '../runtime/exceptions.ts';
 import {
@@ -15,9 +16,10 @@ import {
 } from '../runtime/pipeline.ts';
 import {
     CliExit,
-    exitCodeFor,
-    fail,
+    errorCodeFor,
+    failWithCode,
     loadSettingsOrFail,
+    LogFolderError,
     UsageError,
 } from './errors.ts';
 
@@ -64,8 +66,10 @@ export interface GenerateResult {
     /** The run's log, absolute; `null` if the run failed before the log opened. */
     log: string | null;
     error: {
-        /** Reserved for stable error codes; always `null` for now. */
-        code: null;
+        /** The stable error code, e.g. `STEP_OUT_OF_TURNS`; see `ERROR_CODES`. */
+        code: ErrorCode;
+        /** What to do about it: one or two sentences, fixed for the code. */
+        hint: string;
         /** The error's class name, e.g. `ExtractorError`, `APIError`. */
         type: string;
         /** The stage that failed; `null` if the run failed before the first. */
@@ -111,6 +115,7 @@ function failureResult(error: unknown, run: RunRecord): GenerateResult {
     // A CliExit carries the failure that ended the run, if there was one.
     const cause = error instanceof CliExit ? error.cause : error;
     const named = cause instanceof Error ? cause : undefined;
+    const code = errorCodeFor(cause ?? error);
     const { stage, step } = run.progress;
     return {
         status: 'failure',
@@ -120,7 +125,8 @@ function failureResult(error: unknown, run: RunRecord): GenerateResult {
         testCase: stage === 'generate' ? (run.paths?.testCase ?? null) : null,
         log: run.log ?? null,
         error: {
-            code: null,
+            code,
+            hint: ERROR_CODES[code].hint,
             type:
                 named?.constructor.name ??
                 (cause === undefined ? 'UsageError' : 'Error'),
@@ -140,12 +146,15 @@ function printJson(value: GenerateResult): void {
 const WATCHDOG_TICK_MS = 5_000;
 
 /** How long a run may go without a line on standard error, in ms. */
-const QUIET_LIMIT_MS = 30_000;
+const QUIET_LIMIT_MS = 10_000;
 
 /**
  * Log a line whenever the run has gone `QUIET_LIMIT_MS` without one, so a long
- * run never looks stuck: `Still working on <stage>, step "<step>" (<n>s)`,
- * where `<n>` is the time since the last line that was not the watchdog's.
+ * run never looks stuck: `Waiting for <stage> to finish: step <i> of <n>,
+ * "<step>" (<s>s)` while a step is extracted, else without the step number or
+ * the step, where `<s>` is the time since the last line that was not the
+ * watchdog's. A line comes at most `QUIET_LIMIT_MS` plus one tick (15 seconds)
+ * after the last.
  *
  * @param progress - The stage and step under way, named in the line.
  * @returns The timer; clear it when the run ends.
@@ -163,15 +172,31 @@ function watchProgress(progress: RunProgress): NodeJS.Timeout {
         if (now - last < QUIET_LIMIT_MS) {
             return;
         }
-        const { stage, step } = progress;
-        const onStep = step === undefined ? '' : `, step ${JSON.stringify(step)}`;
-        const where = stage === undefined ? '' : ` on ${stage}${onStep}`;
         const seconds = Math.round((now - quietSince) / 1000);
-        logger.info(`Still working${where} (${seconds}s)`);
+        logger.info(`${progressLine(progress)} (${seconds}s)`);
         ownLine = lastLineAt();
     }, WATCHDOG_TICK_MS);
     timer.unref();
     return timer;
+}
+
+/**
+ * What the run is waiting for, as the watchdog says it.
+ *
+ * @param progress - The stage and step under way.
+ * @returns For example `Waiting for extract to finish: step 6 of 14, "Log in"`.
+ */
+function progressLine(progress: RunProgress): string {
+    const { stage, step, stepNumber, stepCount } = progress;
+    const waiting = `Waiting for ${stage ?? 'the run'} to finish`;
+    if (step === undefined) {
+        return waiting;
+    }
+    const position =
+        stepNumber === undefined || stepCount === undefined
+            ? 'step'
+            : `step ${stepNumber} of ${stepCount},`;
+    return `${waiting}: ${position} ${JSON.stringify(step)}`;
 }
 
 /** Path of `file` relative to the working directory, as shown to the user. */
@@ -186,7 +211,8 @@ function shown(file: string): string {
  * the last line logged, success or failure, whatever the log level. Results
  * go to standard output: the three paths, or with `--json` one JSON object
  * (for success and failure alike); progress and logs go to standard error,
- * where a line names the stage and step whenever 30 seconds pass without one.
+ * where a `Waiting for <stage> to finish` line, naming the step and its number
+ * while one is extracted, comes whenever 10 to 15 seconds pass without one.
  *
  * @param markdownPath - The test case specification, relative to the working
  *   directory.
@@ -236,7 +262,7 @@ async function generate(
         const message =
             `invalid value for '<markdown_path>': ` +
             `file ${JSON.stringify(markdownPath)} does not exist.`;
-        fail(message, new UsageError(message), 2);
+        failWithCode(message, new UsageError(message));
     }
     const root = findProjectRoot();
     const settings = loadSettingsOrFail(settingFlags(options));
@@ -249,12 +275,10 @@ async function generate(
     try {
         await mkdir(path.dirname(logFile), { recursive: true });
     } catch (error) {
-        fail(
+        const message =
             `Cannot create the log folder ${path.dirname(logFile)}: ` +
-                errorMessage(error),
-            error,
-            2,
-        );
+            errorMessage(error);
+        failWithCode(message, new LogFolderError(message, { cause: error }));
     }
     setLogFile(logFile);
     run.log = logFile;
@@ -268,9 +292,7 @@ async function generate(
             progress: run.progress,
         });
     } catch (error) {
-        // A setup problem is the developer's to fix; its stack is only noise.
-        const exitCode = exitCodeFor(error);
-        fail(errorMessage(error), error, exitCode, exitCode === 1);
+        failWithCode(errorMessage(error), error);
     } finally {
         clearInterval(watchdog);
         logger.always(logLine);

@@ -32,6 +32,8 @@ npm init playwright@latest            # only if the project has no Playwright ye
 testpilot init                        # check the setup and create .testpilot/
 ```
 
+To let an AI agent such as GitHub Copilot drive testpilot, also install its skill: see [Using testpilot from an agent](#using-testpilot-from-an-agent).
+
 Then set your Azure OpenAI up (see [Configuration](#configuration)) and run `testpilot doctor` to confirm everything is in place. `doctor` prints the command that fixes anything missing.
 
 The generated scripts run with the project's own Playwright and `playwright.config.*`; testpilot's own Playwright is only used while generating.
@@ -101,7 +103,7 @@ The key is written to `.env.local` at the project root as `TESTPILOT_AZURE_OPENA
     testpilot generate examples/automation/test_login_incorrect_credentials.md
     ```
 
-    It writes the generated script to the scripts folder (`scriptsDir`, `testpilot/` by default; this repo sets it to `output/testpilot/`), the validated test case to `.testpilot/tests/`, and a log of the run to `.testpilot/logs/`, all named after the input file. Progress goes to stderr, whose first and last line is `Log: <path>`; whenever nothing has been logged for 30 seconds it logs `Still working on <stage>, step "<step>" (<n>s)`, so a long run never looks stuck. When the run succeeds, stdout gets the three paths, relative to the working directory:
+    It writes the generated script to the scripts folder (`scriptsDir`, `testpilot/` by default; this repo sets it to `output/testpilot/`), the validated test case to `.testpilot/tests/`, and a log of the run to `.testpilot/logs/`, all named after the input file. Progress goes to stderr, whose first and last line is `Log: <path>`; whenever nothing has been logged for 10 seconds it logs (checked every 5 seconds, so no gap exceeds 15) `Waiting for <stage> to finish: step <i> of <n>, "<step>" (<s>s)` (the step part only while a step is extracted), so a long run never looks stuck. When the run succeeds, stdout gets the three paths, relative to the working directory:
 
     ```
     spec: output/testpilot/test_login_incorrect_credentials.spec.ts
@@ -132,7 +134,8 @@ The key is written to `.env.local` at the project root as `TESTPILOT_AZURE_OPENA
       "testCase": null,
       "log": "/work/project/.testpilot/logs/2026-11-07_19-02-16-test_login.log",
       "error": {
-        "code": null,
+        "code": "STEP_OUT_OF_TURNS",
+        "hint": "The agent did not finish the step within the turn limit. ...",
         "type": "ExtractorError",
         "stage": "extract",
         "step": "Verify the welcome message",
@@ -141,7 +144,9 @@ The key is written to `.env.local` at the project root as `TESTPILOT_AZURE_OPENA
     }
     ```
 
-    `spec`, `testCase` and `log` are absolute paths, `null` when the file was not written (`log` is `null` if the run failed before the log opened); on success `error` is `null`. `stage` is `structure`, `extract`, `validate` or `generate` (`null` before the first), and `step` is the step being extracted or whose replay failed (`null` if none). `type` is the error's class name; `code` is reserved and always `null` for now. A missing input file reports `UsageError` and an invalid configuration `ConfigurationError`, both with exit code `2`.
+    `spec`, `testCase` and `log` are absolute paths, `null` when the file was not written (`log` is `null` if the run failed before the log opened); on success `error` is `null`. `stage` is `structure`, `extract`, `validate` or `generate` (`null` before the first), and `step` is the step being extracted or whose replay failed (`null` if none). `type` is the error's class name. `code` is a stable error code, such as `INPUT_NOT_FOUND`, `CONFIG_INVALID`, `LLM_SETTINGS_MISSING`, `BROWSER_LAUNCH_FAILED`, `STEP_OUT_OF_TURNS` or `SCRIPT_ASSEMBLY_FAILED`, and `hint` says what to do about it: both are on every failure, and each code has a fixed exit code. The catalog of the 20 codes, with their exit codes and hints, is `ERROR_CODES` in `src/error-codes.ts`.
+
+    Without `--json`, the final error line on stderr starts with the code (`STEP_OUT_OF_TURNS: <message>`) and the hint follows on its own line (`Hint: <hint>`).
 
 2. Run the generated test:
 
@@ -160,7 +165,7 @@ The key is written to `.env.local` at the project root as `TESTPILOT_AZURE_OPENA
 
 ### Exit codes
 
-Every command exits with `0` on success (and for `--help` or `--version`), `1` when the test case failed to generate, and `2` for a setup, usage or configuration error: an unknown command or option, a missing argument, an invalid setting, a missing input file or API key, a rejected API key or deployment (HTTP 401, 403, 404), or Chromium that cannot launch.
+Every command exits with `0` on success (and for `--help` or `--version`), `1` when the test case failed to generate, and `2` for a setup, usage or configuration error: an unknown command or option, a missing argument, an invalid setting, a missing input file or API key, a rejected API key or deployment (HTTP 401, 403, 404), or Chromium that cannot launch. Each failure of `generate` has a stable error code with a fixed exit code (`ERROR_CODES` in `src/error-codes.ts`), shown on stderr and in `--json`.
 
 ### Writing a test case
 
@@ -179,6 +184,26 @@ urls = ["https://www.saucedemo.com/", "https://www.saucedemo.com/inventory.html"
 4. Click on the 'Login' button
 5. Verify that the Products are visible successfully
 ```
+
+## Using testpilot from an agent
+
+An AI agent such as GitHub Copilot in VS Code can run testpilot for you once it has the testpilot skill, which teaches it the commands, the error codes and when to ask you. Install the skill in the project, after `testpilot init`:
+
+```bash
+testpilot init --skills               # .agents/skills/testpilot/ (read by VS Code Copilot); same as --skills=agents
+testpilot init --skills=claude        # .claude/skills/testpilot/ for Claude Code (or =copilot: .github/skills/testpilot/)
+testpilot init --skills -g            # for you, in your home folder, instead of this project
+```
+
+Running the command again updates the skill, replacing the installed copy, and `testpilot doctor` warns when a copy differs from the one this testpilot bundles (an older version, or edited by hand): `! Skill: <path> is outdated`, with the command that updates it as the fix. The skill is installed even if `init`'s checks fail; `-g` installs only the user copy, so it can run outside a project.
+
+What the agent does, and what it won't:
+
+- It generates from your test case. Give it a markdown file or the steps in your prompt; for a vague request it asks for the steps rather than inventing a test. A new test case is saved where the project already keeps them, or in `.testpilot/input/`.
+- It runs `testpilot generate` and waits, since a run takes minutes, then reports the spec it wrote. It does not run the spec.
+- When a run fails, it relays the error code, step, message, hint and log path, recommends a fix and waits for you: it does not change the test case or the settings and re-run on its own.
+- It asks before running any `npm` or `npx` command, such as installing a newer Playwright.
+- It never handles the Azure OpenAI API key. If the key is missing, it tells you to run `testpilot config set-azure-openai --prompt-api-key` in your own terminal.
 
 ## Development
 

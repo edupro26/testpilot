@@ -174,9 +174,7 @@ export class Validator {
         } catch (error) {
             throw new ValidatorError(
                 `LLM response was not valid JSON: ${errorMessage(error)}`,
-                {
-                    cause: error,
-                },
+                { code: 'LLM_RESPONSE_INVALID', cause: error },
             );
         }
 
@@ -184,6 +182,7 @@ export class Validator {
         if (!parsed.success) {
             throw new ValidatorError(
                 `LLM response did not match the verdict shape: ${z.prettifyError(parsed.error)}`,
+                { code: 'LLM_RESPONSE_INVALID' },
             );
         }
         const semantic = parsed.data;

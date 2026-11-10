@@ -2,6 +2,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { chromium } from '@playwright/test';
@@ -15,6 +16,7 @@ import {
 } from '../runtime/exceptions.ts';
 import { CHROMIUM_ARGS } from '../validator/browser.ts';
 import { CliExit } from './errors.ts';
+import { checkSkills } from './skills.ts';
 
 /** The oldest Node.js major version testpilot runs on. */
 const MIN_NODE_MAJOR = 24;
@@ -220,9 +222,9 @@ export function compareVersions(a: string, b: string): number {
 /**
  * Run every setup check, in order.
  *
- * @param options - The project root, environment and Chromium launcher to
- *   check; the working directory, `process.env` and testpilot's Chromium by
- *   default.
+ * @param options - The project root, environment, Chromium launcher and home
+ *   folder to check; the project root found from the working directory,
+ *   `process.env`, testpilot's Chromium and the user's home by default.
  * @returns One result per check.
  */
 export async function runChecks(
@@ -230,12 +232,14 @@ export async function runChecks(
         cwd?: string;
         env?: NodeJS.ProcessEnv;
         launchChromium?: () => Promise<void>;
+        home?: string;
     } = {},
 ): Promise<Check[]> {
     const {
         cwd = findProjectRoot(),
         env = process.env,
         launchChromium = launchOwnChromium,
+        home = homedir(),
     } = options;
     const ownVersion = packageVersion(
         createRequire(import.meta.url).resolve('@playwright/test/package.json'),
@@ -246,6 +250,7 @@ export async function runChecks(
         checkProjectPlaywright(cwd, ownVersion),
         checkPlaywrightConfig(cwd),
         checkLlmSettings(env, cwd),
+        ...(await checkSkills({ cwd, home })),
     ];
 }
 

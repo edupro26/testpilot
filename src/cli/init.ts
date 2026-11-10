@@ -2,6 +2,7 @@
 
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 import {
@@ -14,6 +15,7 @@ import {
 import { ConfigurationError } from '../runtime/exceptions.ts';
 import { type Check, findPlaywrightConfig, formatChecks, runChecks } from './doctor.ts';
 import { CliExit } from './errors.ts';
+import { installSkill, shownSkillPath, type SkillAgent, skillDir } from './skills.ts';
 
 /** The check `init` does not stop on: the LLM is configured after `init`. */
 const LLM_CHECK = 'LLM settings';
@@ -55,30 +57,78 @@ function stripComments(text: string): string {
  *
  * Only what testpilot cannot know by itself is written: `scriptsDir`, which
  * depends on the project's Playwright `testDir`, and the `.gitignore`. An
- * existing file is never overwritten, so `init` is safe to run again.
+ * existing file is never overwritten, so `init` is safe to run again; the one
+ * exception is the skill folder, which `skills` replaces.
  *
- * @param options - The project root and the checks to run; the working
- *   directory and the doctor checks by default.
- * @throws {CliExit} With status 2, before writing anything, if a check other
- *   than the LLM settings failed.
+ * With `skills`, the bundled skill is also installed in the project, whatever
+ * the checks said: an unset project is when the agent's setup help is most
+ * useful. It is installed before the checks run, so they see the new copy. With
+ * `global` it is installed for the user only, and the project is neither
+ * checked nor written.
+ *
+ * @param options - The project root and the checks to run (the working
+ *   directory and the doctor checks by default), the agent to install the skill
+ *   for, whether that copy is the user's, and the home folder (the user's by
+ *   default).
+ * @throws {CliExit} With status 2, before writing `.testpilot/`, if a check
+ *   other than the LLM settings failed.
  */
 export async function initCommand(
-    options: { cwd?: string; checks?: () => Promise<Check[]> } = {},
+    options: {
+        cwd?: string;
+        checks?: () => Promise<Check[]>;
+        skills?: SkillAgent;
+        global?: boolean;
+        home?: string;
+    } = {},
 ): Promise<void> {
-    const { cwd = findProjectRoot(), checks = () => runChecks({ cwd }) } = options;
+    const {
+        cwd = findProjectRoot(),
+        checks = () => runChecks({ cwd, home }),
+        skills,
+        global = false,
+        home = homedir(),
+    } = options;
+    if (global && skills !== undefined) {
+        print(await installSkillLine({ agent: skills, global }, { cwd, home }));
+        return;
+    }
+
+    const lines: string[] = [];
+    // Install first, so the checks do not report the copy this run replaces.
+    if (skills !== undefined) {
+        lines.push(await installSkillLine({ agent: skills, global }, { cwd, home }));
+    }
     const results = await checks();
     print(formatChecks(results));
     const failed = results.filter((check) => check.status === 'fail');
     if (failed.some((check) => check.name !== LLM_CHECK)) {
+        printAfterChecks(lines);
         throw new CliExit(2);
     }
 
     const scriptsDir = await scriptsDirFor(cwd);
     await mkdir(path.join(cwd, CONFIG_DIR), { recursive: true });
-    const lines = [
-        await writeGitignore(cwd),
-        await writeConfig(cwd, scriptsDir),
-    ].filter((line) => line !== undefined);
+    lines.push(
+        ...[await writeGitignore(cwd), await writeConfig(cwd, scriptsDir)].filter(
+            (line) => line !== undefined,
+        ),
+    );
+    printAfterChecks(lines);
+}
+
+/** Install the skill and say where, relative to the project or `~`. */
+async function installSkillLine(
+    target: { agent: SkillAgent; global: boolean },
+    places: { cwd: string; home: string },
+): Promise<string> {
+    const destination = skillDir(target, places);
+    const status = await installSkill(destination);
+    return `${status} ${shownSkillPath(target, places)}/`;
+}
+
+/** Print what init did, after the checks and set apart from them. */
+function printAfterChecks(lines: string[]): void {
     if (lines.length > 0) {
         print(['', ...lines].join('\n'));
     }

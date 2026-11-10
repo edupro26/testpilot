@@ -1,5 +1,7 @@
 /** How CLI commands fail: a logged error, then an exit status. */
 
+import { APIConnectionError, APIError } from 'openai';
+
 import {
     configureLogging,
     findProjectRoot,
@@ -7,11 +9,15 @@ import {
     type SettingFlags,
     type Settings,
 } from '../config.ts';
+import { ERROR_CODES, type ErrorCode } from '../error-codes.ts';
 import { logger } from '../logger.ts';
 import {
+    ApiKeyInConfigError,
     BrowserLaunchError,
     ConfigurationError,
     errorMessage,
+    MissingSettingsError,
+    PipelineError,
 } from '../runtime/exceptions.ts';
 
 /** Ends the CLI with `exitCode`, after the failure has been logged. */
@@ -36,43 +42,85 @@ export class UsageError extends Error {
     override name = 'UsageError';
 }
 
-/** The HTTP statuses that mean the setup is wrong, not the test case. */
-const SETUP_STATUSES: readonly unknown[] = [401, 403, 404];
+/** The log folder of a run cannot be created. */
+export class LogFolderError extends Error {
+    override name = 'LogFolderError';
+}
 
-/** Whether `error` carries an HTTP status that means the setup is wrong. */
-function hasSetupStatus(error: unknown): boolean {
-    return (
-        typeof error === 'object' &&
-        error !== null &&
-        'status' in error &&
-        SETUP_STATUSES.includes(error.status)
-    );
+/** `error` and its `cause` chain, outermost first; ends at a repeat or a non-Error. */
+function causeChain(error: unknown): Error[] {
+    const chain: Error[] = [];
+    for (let current = error; current instanceof Error && !chain.includes(current);) {
+        chain.push(current);
+        current = current.cause;
+    }
+    return chain;
+}
+
+/** The HTTP status `error` carries, if it has a numeric one. */
+function statusOf(error: Error): number | undefined {
+    return 'status' in error && typeof error.status === 'number'
+        ? error.status
+        : undefined;
+}
+
+/**
+ * The rules that give a failure its code, most specific first. The first rule
+ * that matches any error in the cause chain decides.
+ */
+const CODE_RULES: readonly [
+    matches: (error: Error) => boolean,
+    code: (error: Error) => ErrorCode,
+][] = [
+    [(error) => error instanceof UsageError, () => 'INPUT_NOT_FOUND'],
+    [(error) => error instanceof LogFolderError, () => 'LOG_DIR_FAILED'],
+    [(error) => error instanceof ApiKeyInConfigError, () => 'API_KEY_IN_CONFIG'],
+    [(error) => error instanceof MissingSettingsError, () => 'LLM_SETTINGS_MISSING'],
+    [(error) => error instanceof ConfigurationError, () => 'CONFIG_INVALID'],
+    [(error) => error instanceof BrowserLaunchError, () => 'BROWSER_LAUNCH_FAILED'],
+    [(error) => [401, 403].includes(statusOf(error) ?? 0), () => 'LLM_AUTH_FAILED'],
+    [(error) => statusOf(error) === 404, () => 'LLM_NOT_FOUND'],
+    [(error) => statusOf(error) === 429, () => 'LLM_RATE_LIMITED'],
+    [(error) => error instanceof APIConnectionError, () => 'LLM_UNREACHABLE'],
+    [
+        (error) => error instanceof APIError || statusOf(error) !== undefined,
+        () => 'LLM_REQUEST_FAILED',
+    ],
+    [
+        (error) => error instanceof PipelineError,
+        (error) => (error as PipelineError).code,
+    ],
+];
+
+/**
+ * Classify a failure that ended a run.
+ *
+ * Looks at `error` and its `cause` chain; a rule that matches anywhere in the
+ * chain beats a later rule, so a `BrowserLaunchError` inside an `McpError` is
+ * `BROWSER_LAUNCH_FAILED`, not `BROWSER_AGENT_FAILED`.
+ *
+ * @param error - The failure that ended a run.
+ * @returns Its stable code; `INTERNAL_ERROR` if nothing matches.
+ */
+export function errorCodeFor(error: unknown): ErrorCode {
+    const chain = causeChain(error);
+    for (const [matches, code] of CODE_RULES) {
+        const found = chain.find(matches);
+        if (found !== undefined) {
+            return code(found);
+        }
+    }
+    return 'INTERNAL_ERROR';
 }
 
 /**
  * Tell a setup problem from a test case that failed to generate.
  *
- * A setup problem is a `ConfigurationError`, a `BrowserLaunchError`, or an HTTP
- * 401, 403 or 404 from the LLM service (a wrong key, no access, or a wrong
- * endpoint or deployment), found in `error` or anywhere in its `cause` chain.
- *
  * @param error - The failure that ended a pipeline run.
- * @returns `2` for a setup problem, `1` for anything else.
+ * @returns `2` for a setup problem, `1` for anything else; see `ERROR_CODES`.
  */
 export function exitCodeFor(error: unknown): 1 | 2 {
-    const seen = new Set<unknown>();
-    for (let current = error; current !== undefined && !seen.has(current);) {
-        seen.add(current);
-        if (
-            current instanceof ConfigurationError ||
-            current instanceof BrowserLaunchError ||
-            hasSetupStatus(current)
-        ) {
-            return 2;
-        }
-        current = current instanceof Error ? current.cause : undefined;
-    }
-    return 1;
+    return ERROR_CODES[errorCodeFor(error)].exitCode;
 }
 
 /**
@@ -99,6 +147,27 @@ export function fail(
 }
 
 /**
+ * Log a failure as `CODE: message` and its hint, and end with the code's exit status.
+ *
+ * @param message - The one-line description of the failure.
+ * @param error - The failure, classified by `errorCodeFor` and kept as the
+ *   exit's `cause`. Its stack trace is logged too unless it is a setup problem.
+ * @throws {CliExit} Always.
+ */
+export function failWithCode(message: string, error: unknown): never {
+    const code = errorCodeFor(error);
+    const { exitCode, hint } = ERROR_CODES[code];
+    // A setup problem is the developer's to fix; its stack is only noise.
+    if (exitCode === 1) {
+        logger.error(`${code}: ${message}`, error);
+    } else {
+        logger.error(`${code}: ${message}`);
+    }
+    logger.error(`Hint: ${hint}`);
+    throw new CliExit(exitCode, { cause: error });
+}
+
+/**
  * Load settings, exiting with a clear error if they are invalid.
  *
  * @param flags - The command flags given, which override every other source.
@@ -111,7 +180,7 @@ export function loadSettingsOrFail(flags: SettingFlags = {}): Settings {
         settings = resolveSettings(process.env, findProjectRoot(), flags).settings;
     } catch (error) {
         configureLogging();
-        fail(`Invalid configuration: ${errorMessage(error)}`, error, 2);
+        failWithCode(`Invalid configuration: ${errorMessage(error)}`, error);
     }
     configureLogging(settings);
     return settings;

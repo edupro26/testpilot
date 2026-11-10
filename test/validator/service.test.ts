@@ -238,4 +238,7 @@ test('errors on an unusable verdict', async () => {
     await expect(wrongShape.judge(STEP, [STATEMENT], PAGE)).rejects.toThrow(
         /did not match/,
     );
+    await expect(wrongShape.judge(STEP, [STATEMENT], PAGE)).rejects.toMatchObject({
+        code: 'LLM_RESPONSE_INVALID',
+    });
 });

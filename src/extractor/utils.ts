@@ -67,7 +67,7 @@ export function requireStatement(code: string, step: string): void {
                 `on its own -- the tool that emitted it spreads a statement over ` +
                 `several lines and must be removed from COLLECTABLE_TOOLS:\n` +
                 `  ${code}\n  (${String(error)})`,
-            { cause: error },
+            { code: 'INTERNAL_ERROR', cause: error },
         );
     }
 }

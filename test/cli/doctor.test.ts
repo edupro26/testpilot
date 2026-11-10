@@ -1,6 +1,8 @@
 /** Tests for the doctor command: each setup check and its fix. */
 
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -199,7 +201,10 @@ test('from a project subfolder the checks look at the project root', async () =>
     const previous = process.cwd();
     process.chdir(nested);
     try {
-        const checks = await runChecks({ launchChromium: () => Promise.resolve() });
+        const checks = await runChecks({
+            home: await emptyDir(),
+            launchChromium: () => Promise.resolve(),
+        });
         expect(
             checks.find((check) => check.name === 'Playwright config'),
         ).toMatchObject({
@@ -220,7 +225,47 @@ describe('the doctor command', () => {
         launch?.mockRestore();
     });
 
+    test('a stale skill is a warning, so a passing doctor still exits 0', async () => {
+        const home = await emptyDir();
+        vi.stubEnv('HOME', home);
+        vi.stubEnv('USERPROFILE', home);
+        const root = await projectWithPlaywright(
+            (
+                JSON.parse(
+                    readFileSync(
+                        createRequire(import.meta.url).resolve(
+                            '@playwright/test/package.json',
+                        ),
+                        'utf8',
+                    ),
+                ) as { version: string }
+            ).version,
+        );
+        await writeFile(path.join(root, 'package.json'), '{}');
+        await writeFile(path.join(root, 'playwright.config.ts'), 'export default {};');
+        for (const [variable, value] of Object.entries(AZURE_ENV)) {
+            vi.stubEnv(variable, value);
+        }
+        process.chdir(root);
+        const skill = path.join(home, '.claude', 'skills', 'testpilot');
+        await mkdir(skill, { recursive: true });
+        await writeFile(path.join(skill, 'SKILL.md'), 'edited');
+        launch = vi.spyOn(chromium, 'launch').mockResolvedValue({
+            close: () => Promise.resolve(),
+        } as never);
+
+        expect(await runCli(['doctor'])).toBe(0);
+
+        const output = stdout();
+        expect(output).toContain('! Skill: ~/.claude/skills/testpilot is outdated');
+        expect(output).toContain('fix: testpilot init --skills=claude -g');
+        expect(output).not.toContain('✖');
+    });
+
     test('outside a Node project it exits 2 and prints each fix', async () => {
+        const home = await emptyDir();
+        vi.stubEnv('HOME', home);
+        vi.stubEnv('USERPROFILE', home);
         launch = vi.spyOn(chromium, 'launch').mockResolvedValue({
             close: () => Promise.resolve(),
         } as never);

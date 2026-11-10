@@ -217,6 +217,7 @@ describe('extractAndValidate', () => {
         );
 
         expect(error).toBeInstanceOf(ValidatorError);
+        expect((error as ValidatorError).code).toBe('STEP_VALIDATION_FAILED');
         expect(String(error)).toContain('Log in');
         expect(String(error)).toContain('still wrong');
         // The budget is the run's, not the step's: an earlier step may have
@@ -228,7 +229,10 @@ describe('extractAndValidate', () => {
 
     test('an Extractor or MCP error propagates rather than being retried', async () => {
         // A rejected statement or a dead MCP server is not feedback to act on.
-        for (const error of [new ExtractorError('boom'), new McpError('boom')]) {
+        for (const error of [
+            new ExtractorError('boom', { code: 'STEP_ABANDONED' }),
+            new McpError('boom', { code: 'BROWSER_AGENT_FAILED' }),
+        ]) {
             const fake = stages([error]);
 
             await expect(extractAndValidate(testCase(['Log in']), fake)).rejects.toBe(
@@ -260,8 +264,8 @@ describe('extractAndValidate', () => {
             await extractAndValidate(testCase(['Open', 'Log in']), fake, run);
 
             expect(seen).toEqual([
-                { stage: 'extract', step: 'Open' },
-                { stage: 'extract', step: 'Log in' },
+                { stage: 'extract', step: 'Open', stepNumber: 1, stepCount: 2 },
+                { stage: 'extract', step: 'Log in', stepNumber: 2, stepCount: 2 },
                 { stage: 'validate', step: undefined },
             ]);
         });
@@ -296,10 +300,10 @@ describe('extractAndValidate', () => {
 
             // Open, Log in, replay (fails), re-extraction of Log in, replay.
             expect(seen).toEqual([
-                { stage: 'extract', step: 'Open' },
-                { stage: 'extract', step: 'Log in' },
+                { stage: 'extract', step: 'Open', stepNumber: 1, stepCount: 2 },
+                { stage: 'extract', step: 'Log in', stepNumber: 2, stepCount: 2 },
                 { stage: 'validate', step: undefined },
-                { stage: 'extract', step: 'Log in' },
+                { stage: 'extract', step: 'Log in', stepNumber: 2, stepCount: 2 },
                 { stage: 'validate', step: undefined },
             ]);
         });

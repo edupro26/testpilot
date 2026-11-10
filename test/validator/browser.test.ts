@@ -102,6 +102,7 @@ test('a Chromium that cannot launch is a BrowserLaunchError, with its cause', as
         expect(error).toBeInstanceOf(BrowserLaunchError);
         expect((error as Error).message).toContain('Executable does not exist');
         expect((error as Error).cause).toBe(cause);
+        expect((error as BrowserLaunchError).code).toBe('BROWSER_LAUNCH_FAILED');
     } finally {
         launch.mockRestore();
     }

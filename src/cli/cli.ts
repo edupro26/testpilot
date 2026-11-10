@@ -15,6 +15,7 @@ import { doctorCommand } from './doctor.ts';
 import { CliExit } from './errors.ts';
 import { generateCommand } from './generate.ts';
 import { initCommand } from './init.ts';
+import { SKILL_AGENTS, type SkillAgent } from './skills.ts';
 
 /** The version in testpilot's own `package.json`. */
 const VERSION = (
@@ -75,9 +76,39 @@ export function buildProgram(): Command {
     program
         .command('init')
         .description(
-            'Set testpilot up in this project: check the setup and create .testpilot/.',
+            'Set testpilot up in this project: check the setup and create ' +
+                '.testpilot/. With --skills, also install the testpilot skill for AI ' +
+                'agents.',
         )
-        .action(() => initCommand());
+        .option(
+            '--skills [agent]',
+            'install the testpilot skill for an AI agent: agents (the default, ' +
+                'in .agents/skills/), copilot or claude',
+        )
+        .option(
+            '-g, --global',
+            'with --skills, install it for the user (in the home folder), not the ' +
+                'project',
+        )
+        .action(
+            async (
+                options: { skills?: string | true; global?: boolean },
+                command: Command,
+            ) => {
+                if (options.global === true && options.skills === undefined) {
+                    command.error('error: -g, --global needs --skills');
+                }
+                const agent = options.skills === true ? 'agents' : options.skills;
+                if (agent !== undefined && !isSkillAgent(agent)) {
+                    command.error(
+                        `error: unknown agent '${agent}' for --skills; use ` +
+                            `${SKILL_AGENTS.slice(0, -1).join(', ')} or ` +
+                            `${SKILL_AGENTS.at(-1)}`,
+                    );
+                }
+                await initCommand({ skills: agent, global: options.global });
+            },
+        );
 
     const config = program
         .command('config')
@@ -117,6 +148,10 @@ export function buildProgram(): Command {
         .action((options: SetAzureOptions) => configSetAzureOpenAICommand(options));
 
     return program;
+}
+
+function isSkillAgent(value: string): value is SkillAgent {
+    return (SKILL_AGENTS as readonly string[]).includes(value);
 }
 
 /**

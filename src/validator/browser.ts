@@ -106,7 +106,7 @@ export async function launchChromium(headless: boolean): Promise<Browser> {
     } catch (error) {
         throw new BrowserLaunchError(
             `Could not launch Chromium: ${errorMessage(error)}`,
-            { cause: error },
+            { code: 'BROWSER_LAUNCH_FAILED', cause: error },
         );
     }
 }

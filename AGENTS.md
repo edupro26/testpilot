@@ -10,8 +10,9 @@ examples/                           # sample test-case markdown inputs, grouped 
 output/                             # gitignored; this repo's scriptsDir is output/testpilot/ (generated specs)
 .testpilot/                         # config.json (committed); logs/, tests/ (JSON per run), .playwright-mcp/ (gitignored)
 prompts/                            # one template per pipeline stage ({{placeholder}} syntax)
+skills/testpilot/                   # the agent skill (SKILL.md + references/) that `testpilot init --skills` copies into a project or the user's home
 src/
-├── cli/                            # the testpilot program: cli.ts (commands), one file per command (generate, doctor, init, config)
+├── cli/                            # the testpilot program: cli.ts (commands), one file per command (generate, doctor, init, config), skills.ts (skill destinations and install)
 ├── extractor/                      # agent drives Playwright MCP, collects emitted code
 ├── generator/                      # LLM assembles the script around the validated statements
 ├── llm/                            # LLM provider abstraction: protocol, factory, provider/
@@ -20,6 +21,7 @@ src/
 ├── structurer/                     # markdown -> structured JSON
 ├── validator/                      # browser.ts (replay) + service.ts (semantic check)
 ├── config.ts                       # Settings (zod) + configureLogging
+├── error-codes.ts                  # ERROR_CODES: stable error codes, exit codes, hints
 ├── logger.ts                       # levelled, coloured stderr logger; also appends to the run's log file
 ├── main.ts                         # the testpilot executable: runs the CLI
 └── prompt-loader.ts                # loadPrompt / renderPrompt
@@ -55,6 +57,7 @@ npm run check                        # all of the above, without writing
 npm link                             # once: puts `testpilot` on the PATH
 testpilot doctor                     # check the setup; prints the fix for anything missing
 testpilot init                       # set the project up: create .testpilot/ (safe to re-run)
+testpilot init --skills[=<agent>] [-g] # install the skill from skills/testpilot/ (agents, the default, copilot or claude; -g: user's home); re-run to update
 testpilot --version                  # print the installed version
 testpilot config list                # every effective setting and where it came from
 testpilot config set-azure-openai    # write the Azure OpenAI settings (--help for flags)

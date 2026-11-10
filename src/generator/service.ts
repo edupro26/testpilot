@@ -57,6 +57,7 @@ export class Generator {
         if (statements.length === 0) {
             throw new GeneratorError(
                 `${JSON.stringify(testCase.name)} has no validated statements to assemble`,
+                { code: 'NO_STATEMENTS' },
             );
         }
 
@@ -87,6 +88,7 @@ export class Generator {
         if (syntaxErrors.length > 0) {
             throw new GeneratorError(
                 `Generated script does not compile: ${syntaxErrors.join('; ')}`,
+                { code: 'SCRIPT_ASSEMBLY_FAILED' },
             );
         }
 
@@ -98,6 +100,7 @@ export class Generator {
             throw new GeneratorError(
                 'Generated script dropped or altered validated code:\n' +
                     missing.map((line) => `  ${line}`).join('\n'),
+                { code: 'SCRIPT_ASSEMBLY_FAILED' },
             );
         }
 

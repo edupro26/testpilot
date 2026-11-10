@@ -48,9 +48,7 @@ export class Structurer {
         } catch (error) {
             throw new StructurerError(
                 `LLM response was not valid JSON: ${errorMessage(error)}`,
-                {
-                    cause: error,
-                },
+                { code: 'LLM_RESPONSE_INVALID', cause: error },
             );
         }
 
@@ -58,6 +56,7 @@ export class Structurer {
         if (!parsed.success) {
             throw new StructurerError(
                 `LLM response did not match the TestCase shape: ${z.prettifyError(parsed.error)}`,
+                { code: 'LLM_RESPONSE_INVALID' },
             );
         }
         const testCase = parsed.data;

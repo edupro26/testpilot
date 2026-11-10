@@ -4,7 +4,7 @@ import { AzureOpenAI } from 'openai';
 
 import type { Settings } from '../../config.ts';
 import { logger } from '../../logger.ts';
-import { ConfigurationError } from '../../runtime/exceptions.ts';
+import { MissingSettingsError } from '../../runtime/exceptions.ts';
 import type {
     CompletionRequest,
     ConversationRequest,
@@ -21,7 +21,7 @@ export class AzureOpenAIProvider implements LLMProvider {
      * Initialize the Azure OpenAI client from settings.
      *
      * @param settings - Application settings containing Azure OpenAI credentials.
-     * @throws {ConfigurationError} If required Azure OpenAI settings are missing.
+     * @throws {MissingSettingsError} If required Azure OpenAI settings are missing.
      */
     constructor(settings: Settings) {
         const {
@@ -81,7 +81,7 @@ export class AzureOpenAIProvider implements LLMProvider {
  *
  * @param required - Mapping of env var name to its resolved value.
  * @returns The same mapping, narrowed to strings.
- * @throws {ConfigurationError} If any value in `required` is empty.
+ * @throws {MissingSettingsError} If any value in `required` is empty.
  */
 function requireSettings<K extends string>(
     required: Record<K, string | undefined>,
@@ -89,7 +89,7 @@ function requireSettings<K extends string>(
     const entries = Object.entries(required) as [K, string | undefined][];
     const missing = entries.filter(([, value]) => !value).map(([name]) => name);
     if (missing.length > 0) {
-        throw new ConfigurationError(`Missing required ${missing.join(', ')}`);
+        throw new MissingSettingsError(`Missing required ${missing.join(', ')}`);
     }
     return Object.fromEntries(entries) as Record<K, string>;
 }

@@ -4,11 +4,13 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { APIConnectionError } from 'openai';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { runCli } from '../../src/cli/cli.ts';
-import { exitCodeFor, loadSettingsOrFail } from '../../src/cli/errors.ts';
+import { loadSettingsOrFail } from '../../src/cli/errors.ts';
 import { type GenerateResult, logFilePath } from '../../src/cli/generate.ts';
+import { ERROR_CODES } from '../../src/error-codes.ts';
 import type { StepResult } from '../../src/extractor/agent.ts';
 import type { RunStepOptions } from '../../src/extractor/service.ts';
 import type { LLMProvider } from '../../src/llm/protocol.ts';
@@ -19,12 +21,7 @@ import {
     statement,
     type StepStatement,
 } from '../../src/model/test-case.ts';
-import {
-    BrowserLaunchError,
-    ConfigurationError,
-    ExtractorError,
-    McpError,
-} from '../../src/runtime/exceptions.ts';
+import { ExtractorError, MissingSettingsError } from '../../src/runtime/exceptions.ts';
 import { outputPaths } from '../../src/runtime/pipeline.ts';
 import {
     stderr,
@@ -291,9 +288,13 @@ test('Smoke test', async ({ page }) => {
         await writeFile(path.join('.testpilot', 'logs'), 'in the way');
         await writeFile('case.md', '# Smoke test');
 
-        expect(await runCli(['generate', 'case.md'])).toBe(2);
-        expect(stderr()).toContain('Cannot create the log folder');
+        expect(await runCli(['generate', 'case.md', '--json'])).toBe(2);
+        expect(stderr()).toContain('LOG_DIR_FAILED: Cannot create the log folder');
         expect(stderr()).toContain(path.join('.testpilot', 'logs'));
+        expect(JSON.parse(stdout())).toMatchObject({
+            exitCode: 2,
+            error: { code: 'LOG_DIR_FAILED', type: 'LogFolderError' },
+        });
     });
 
     test('from a project subfolder, the input is relative to it and outputs go under the root', async () => {
@@ -387,7 +388,7 @@ test('Smoke test', async ({ page }) => {
     });
 
     /**
-     * Run the CLI with the first step taking seven 10-second agent turns, on fake
+     * Run the CLI with the first step taking seven 4-second agent turns, on fake
      * timers; return its exit code.
      *
      * @param onTurn - Called at the start of each turn, e.g. to log a line.
@@ -406,14 +407,14 @@ test('Smoke test', async ({ page }) => {
                         started();
                         for (let turn = 1; turn <= 7; turn++) {
                             onTurn(turn);
-                            await new Promise((resolve) => setTimeout(resolve, 10_000));
+                            await new Promise((resolve) => setTimeout(resolve, 4_000));
                         }
                         return statements(CLICK);
                     })
                     .mockResolvedValueOnce(statements(ASSERT));
             });
             await stepStarted;
-            await vi.advanceTimersByTimeAsync(70_000);
+            await vi.advanceTimersByTimeAsync(28_000);
             const [exitCode] = await running;
             expect(vi.getTimerCount()).toBe(0);
             return exitCode;
@@ -422,18 +423,19 @@ test('Smoke test', async ({ page }) => {
         }
     }
 
-    test('a step quiet for 30 seconds, over several turns, logs a heartbeat', async () => {
-        // No single turn takes 30 s, but the run must not look stuck.
+    test('a step quiet for 10 seconds, over several turns, logs a heartbeat', async () => {
+        // No single turn takes 10 s, but the run must not look stuck.
         expect(await runSlowStep(() => undefined)).toBe(0);
 
         const heartbeats = stderr()
             .split('\n')
-            .filter((line) => line.includes('Still working'));
+            .filter((line) => line.includes('Waiting for'));
         // It repeats while the quiet lasts, counting from the last real line.
-        const where = 'Still working on extract, step "Click the login button"';
+        const where =
+            'Waiting for extract to finish: step 1 of 2, "Click the login button"';
         expect(heartbeats).toEqual([
-            expect.stringContaining(`INFO\x1b[0m] ${where} (30s)`),
-            expect.stringContaining(`INFO\x1b[0m] ${where} (60s)`),
+            expect.stringContaining(`INFO\x1b[0m] ${where} (10s)`),
+            expect.stringContaining(`INFO\x1b[0m] ${where} (20s)`),
         ]);
     });
 
@@ -445,16 +447,31 @@ test('Smoke test', async ({ page }) => {
         ).toBe(0);
 
         expect(stderr()).toContain('Turn 7');
-        expect(stderr()).not.toContain('Still working');
+        expect(stderr()).not.toContain('Waiting for');
     });
 
     test('a missing input file is a usage error', async () => {
         expect(await runCli(['generate', 'missing.md'])).toBe(2);
         expect(stdout()).toBe('');
         expect(stderr()).toContain(
-            `ERROR\x1b[0m] invalid value for '<markdown_path>': ` +
+            `ERROR\x1b[0m] INPUT_NOT_FOUND: invalid value for '<markdown_path>': ` +
                 'file "missing.md" does not exist.',
         );
+        expect(stderr()).toContain(`Hint: ${ERROR_CODES.INPUT_NOT_FOUND.hint}`);
+    });
+
+    test('a failed run logs the code with the message, then the hint', async () => {
+        const [exitCode] = await runPipeline(SMOKE_SCRIPT, [], () => {
+            fakes.runStep = vi
+                .fn<NonNullable<typeof fakes.runStep>>()
+                .mockRejectedValueOnce(
+                    new ExtractorError('out of turns', { code: 'STEP_OUT_OF_TURNS' }),
+                );
+        });
+
+        expect(exitCode).toBe(1);
+        expect(stderr()).toContain('STEP_OUT_OF_TURNS: out of turns');
+        expect(stderr()).toContain(`Hint: ${ERROR_CODES.STEP_OUT_OF_TURNS.hint}`);
     });
 
     test('a successful run prints the three paths on stdout, relative', async () => {
@@ -491,12 +508,14 @@ test('Smoke test', async ({ page }) => {
         expect(stderr()).toContain('Log: ');
     });
 
-    test('--json names the stage and step of an extraction failure', async () => {
+    test('--json reports the code and hint of an extraction failure', async () => {
         const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json'], () => {
             fakes.runStep = vi
                 .fn<NonNullable<typeof fakes.runStep>>()
                 .mockResolvedValueOnce(statements(CLICK))
-                .mockRejectedValueOnce(new ExtractorError('out of turns'));
+                .mockRejectedValueOnce(
+                    new ExtractorError('out of turns', { code: 'STEP_OUT_OF_TURNS' }),
+                );
         });
 
         expect(exitCode).toBe(1);
@@ -507,7 +526,8 @@ test('Smoke test', async ({ page }) => {
             spec: null,
             testCase: null,
             error: {
-                code: null,
+                code: 'STEP_OUT_OF_TURNS',
+                hint: ERROR_CODES.STEP_OUT_OF_TURNS.hint,
                 type: 'ExtractorError',
                 stage: 'extract',
                 step: 'Verify the welcome message',
@@ -515,6 +535,27 @@ test('Smoke test', async ({ page }) => {
             },
         });
         expect(existsSync(result.log!)).toBe(true);
+        expect(stdout()).not.toContain('Hint:');
+        expect(stderr()).toContain('STEP_OUT_OF_TURNS: out of turns');
+        expect(stderr()).toContain(`Hint: ${ERROR_CODES.STEP_OUT_OF_TURNS.hint}`);
+    });
+
+    test('an LLM connection failure mid-extraction keeps its stage and step', async () => {
+        const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json'], () => {
+            fakes.runStep = vi
+                .fn<NonNullable<typeof fakes.runStep>>()
+                .mockResolvedValueOnce(statements(CLICK))
+                .mockRejectedValueOnce(new APIConnectionError({ message: 'down' }));
+        });
+
+        expect(exitCode).toBe(1);
+        expect(JSON.parse(stdout())).toMatchObject({
+            error: {
+                code: 'LLM_UNREACHABLE',
+                stage: 'extract',
+                step: 'Verify the welcome message',
+            },
+        });
     });
 
     test('--json after a generation failure keeps the test case path', async () => {
@@ -524,7 +565,12 @@ test('Smoke test', async ({ page }) => {
         const result = JSON.parse(stdout()) as GenerateResult;
         expect(result).toMatchObject({
             spec: null,
-            error: { type: 'GeneratorError', stage: 'generate', step: null },
+            error: {
+                code: 'SCRIPT_ASSEMBLY_FAILED',
+                type: 'GeneratorError',
+                stage: 'generate',
+                step: null,
+            },
         });
         expect(existsSync(result.testCase!)).toBe(true);
     });
@@ -543,7 +589,12 @@ test('Smoke test', async ({ page }) => {
             spec: null,
             testCase: null,
             log: null,
-            error: { code: null, type: 'ConfigurationError', stage: null, step: null },
+            error: {
+                code: 'CONFIG_INVALID',
+                type: 'ConfigurationError',
+                stage: null,
+                step: null,
+            },
         });
         expect(result.error?.message).toContain('TESTPILOT_MAX_TURNS');
     });
@@ -556,6 +607,7 @@ test('Smoke test', async ({ page }) => {
             exitCode: 2,
             log: null,
             error: {
+                code: 'INPUT_NOT_FOUND',
                 type: 'UsageError',
                 stage: null,
                 step: null,
@@ -568,16 +620,26 @@ test('Smoke test', async ({ page }) => {
 
     test('a missing API key found mid-run exits 2', async () => {
         const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json'], () => {
-            fakes.providerError = new ConfigurationError('No API key');
+            fakes.providerError = new MissingSettingsError(
+                'Missing required TESTPILOT_AZURE_OPENAI_API_KEY',
+            );
         });
 
         expect(exitCode).toBe(2);
         expect(JSON.parse(stdout())).toMatchObject({
             exitCode: 2,
-            error: { type: 'ConfigurationError', message: 'No API key' },
+            error: {
+                code: 'LLM_SETTINGS_MISSING',
+                type: 'MissingSettingsError',
+                // The provider fails before the structure stage starts.
+                stage: null,
+                message: 'Missing required TESTPILOT_AZURE_OPENAI_API_KEY',
+            },
         });
         // A setup error is the message alone; a stack trace would be noise.
-        expect(stderr()).toContain('No API key');
+        expect(stderr()).toContain(
+            'LLM_SETTINGS_MISSING: Missing required TESTPILOT_AZURE_OPENAI_API_KEY',
+        );
         expect(stderr()).not.toContain('\n    at ');
     });
 
@@ -600,22 +662,6 @@ test('Smoke test', async ({ page }) => {
         expect(stderr().includes(`Error: HTTP ${status}\n    at `)).toBe(
             expected === 1,
         );
-    });
-
-    test('exitCodeFor looks through the cause chain', () => {
-        expect(
-            exitCodeFor(new McpError('x', { cause: new BrowserLaunchError('y') })),
-        ).toBe(2);
-        expect(
-            exitCodeFor(new Error('x', { cause: new ConfigurationError('y') })),
-        ).toBe(2);
-        for (const status of [401, 403, 404]) {
-            expect(exitCodeFor(Object.assign(new Error('nope'), { status }))).toBe(2);
-        }
-        expect(exitCodeFor(Object.assign(new Error('nope'), { status: 500 }))).toBe(1);
-        expect(exitCodeFor(new ExtractorError('x'))).toBe(1);
-        expect(exitCodeFor(new RangeError('bug'))).toBe(1);
-        expect(exitCodeFor('a string')).toBe(1);
     });
 
     test('the old bare form is rejected', async () => {

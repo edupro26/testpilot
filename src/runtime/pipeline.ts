@@ -57,7 +57,8 @@ export function outputPaths(
 export type Stage = 'structure' | 'extract' | 'validate' | 'generate';
 
 /**
- * Where a run is, so that a failure can say where it happened.
+ * Where a run is, so that a failure can say where it happened and a progress
+ * line how far the run has got.
  *
  * The pipeline updates it in place as it goes; the caller reads it after a
  * failure.
@@ -67,6 +68,10 @@ export interface RunProgress {
     stage: Stage | undefined;
     /** The step being extracted, or whose replay failed; `undefined` if none. */
     step: string | undefined;
+    /** The extracted step's number in the test case, from 1; `undefined` if none. */
+    stepNumber?: number | undefined;
+    /** How many steps the test case has, while one is extracted. */
+    stepCount?: number | undefined;
 }
 
 /** What `runPipeline` takes besides the input and the settings. */
@@ -126,6 +131,8 @@ export async function runPipeline(
 
     progress.stage = 'generate';
     progress.step = undefined;
+    progress.stepNumber = undefined;
+    progress.stepCount = undefined;
     const generator = new Generator(llm, settings.browserLocale);
     const script = await generator.run(result, runTimeMs);
 
@@ -217,6 +224,8 @@ class ExtractionRun {
         for (;;) {
             this.progress.stage = 'validate';
             this.progress.step = undefined;
+            this.progress.stepNumber = undefined;
+            this.progress.stepCount = undefined;
             const validation = await this.stages.validator.validate(this.working);
             this.working = validation.testCase;
             if (validation.ok) {
@@ -234,8 +243,14 @@ class ExtractionRun {
     /** Have the agent perform a step from where its browser is, judging each report. */
     private extract(ref: StepRef, feedback?: string): Promise<StepResult> {
         const step = this.text(ref);
+        const refs = this.refs();
         this.progress.stage = 'extract';
         this.progress.step = step;
+        this.progress.stepNumber =
+            refs.findIndex(
+                (other) => other.module === ref.module && other.step === ref.step,
+            ) + 1;
+        this.progress.stepCount = refs.length;
         const history = placeStatements(this.working, ref).map(
             ({ statement }) => statement.code,
         );
@@ -268,6 +283,7 @@ class ExtractionRun {
                     `Step ${JSON.stringify(this.text(ref))} still failing, and ` +
                         `the run's ${MAX_RETRIES} retries are spent. Last ` +
                         `failure:\n${feedback}`,
+                    { code: 'STEP_VALIDATION_FAILED' },
                 );
             }
             const broken = await this.restore(ref);

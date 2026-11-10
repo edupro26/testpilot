@@ -219,10 +219,14 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
      */
     async callTool(name: string, args: Record<string, unknown>): Promise<McpResult> {
         if (!ALLOWED_TOOLS.includes(name)) {
-            throw new McpError(`Tool ${JSON.stringify(name)} is not allowlisted`);
+            throw new McpError(`Tool ${JSON.stringify(name)} is not allowlisted`, {
+                code: 'BROWSER_AGENT_FAILED',
+            });
         }
         if (this.session === undefined) {
-            throw new McpError('MCP session is not connected');
+            throw new McpError('MCP session is not connected', {
+                code: 'BROWSER_AGENT_FAILED',
+            });
         }
         logger.debug(`MCP call ${name} ${JSON.stringify(args)}`);
 
@@ -238,9 +242,7 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
         } catch (error) {
             throw new McpError(
                 `MCP call ${JSON.stringify(name)} failed: ${errorMessage(error)}`,
-                {
-                    cause: error,
-                },
+                { code: 'BROWSER_AGENT_FAILED', cause: error },
             );
         }
 
@@ -275,9 +277,7 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
         } catch (error) {
             throw new McpError(
                 `Could not reconnect to Playwright MCP: ${errorMessage(error)}`,
-                {
-                    cause: error,
-                },
+                { code: 'BROWSER_AGENT_FAILED', cause: error },
             );
         }
     }
@@ -292,6 +292,7 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
         if (context === undefined) {
             throw new McpError(
                 'The MCP session exposes no browser context to run statements on',
+                { code: 'BROWSER_AGENT_FAILED' },
             );
         }
         return context.pages().at(-1) ?? (await context.newPage());
@@ -340,6 +341,7 @@ async function openSession(createServer: ServerFactory): Promise<Session> {
         return { client, server };
     } catch (error) {
         throw new McpError(`Could not start Playwright MCP: ${errorMessage(error)}`, {
+            code: 'BROWSER_AGENT_FAILED',
             cause: error,
         });
     }
@@ -369,6 +371,7 @@ async function resolveTools(client: Client): Promise<McpTool[]> {
             `Playwright MCP is missing expected tool(s): ${missing.join(', ')}. ` +
                 `Was the installed @playwright/mcp upgraded, or the testing capability ` +
                 `dropped from its config? It offered: ${[...offered.keys()].sort().join(', ')}`,
+            { code: 'BROWSER_AGENT_FAILED' },
         );
     }
     return ALLOWED_TOOLS.map((name) => {

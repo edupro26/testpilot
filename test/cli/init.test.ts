@@ -9,6 +9,7 @@ import { beforeEach, expect, type MockInstance, test, vi } from 'vitest';
 
 import type { Check } from '../../src/cli/doctor.ts';
 import { initCommand, readTestDir } from '../../src/cli/init.ts';
+import { checkSkills } from '../../src/cli/skills.ts';
 import { loadSettings } from '../../src/config.ts';
 
 const CHECK_NAMES = [
@@ -186,4 +187,63 @@ test('without a literal testDir the scripts go to testpilot/', async () => {
     const unset = await project('export default {};');
     await initCommand({ cwd: unset, checks: checks() });
     expect(JSON.parse(await readConfig(unset))).toEqual({ scriptsDir: 'testpilot' });
+});
+
+test('init --skills installs the skill even when a check fails', async () => {
+    const cwd = await project();
+    await expect(
+        initCommand({ cwd, checks: checks('Playwright config'), skills: 'agents' }),
+    ).rejects.toMatchObject({ exitCode: 2 });
+    expect(existsSync(path.join(cwd, '.agents/skills/testpilot/SKILL.md'))).toBe(true);
+    expect(existsSync(path.join(cwd, '.testpilot'))).toBe(false);
+    expect(printed()).toContain('installed .agents/skills/testpilot/');
+});
+
+test('init --skills installs the skill and sets the project up when checks pass', async () => {
+    const cwd = await project();
+    await initCommand({ cwd, checks: checks(), skills: 'claude' });
+    expect(existsSync(path.join(cwd, '.claude/skills/testpilot/SKILL.md'))).toBe(true);
+    expect(existsSync(path.join(cwd, '.testpilot', 'config.json'))).toBe(true);
+    expect(printed()).toContain('installed .claude/skills/testpilot/');
+
+    stdout.mockClear();
+    await initCommand({ cwd, checks: checks(), skills: 'claude' });
+    expect(printed()).toContain('updated .claude/skills/testpilot/');
+});
+
+test('init --skills installs before the checks, so they see the new copy', async () => {
+    const cwd = await project();
+    const home = await mkdtemp(path.join(tmpdir(), 'testpilot-home-'));
+    const skill = path.join(cwd, '.agents/skills/testpilot');
+    await mkdir(skill, { recursive: true });
+    await writeFile(path.join(skill, 'SKILL.md'), 'edited');
+    const passing = checks();
+
+    await initCommand({
+        cwd,
+        home,
+        checks: async () => [
+            ...(await passing()),
+            ...(await checkSkills({ cwd, home })),
+        ],
+        skills: 'agents',
+    });
+
+    // No warning to run the command that just ran: the check sees the new copy.
+    expect(printed()).not.toContain('outdated');
+    expect(printed()).toContain('Skill: .agents/skills/testpilot');
+    expect(printed()).toContain('updated .agents/skills/testpilot/');
+});
+
+test('init --skills -g installs for the user only, outside any project', async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), 'testpilot-'));
+    const home = await mkdtemp(path.join(tmpdir(), 'testpilot-home-'));
+    const checks = vi.fn();
+    await initCommand({ cwd, home, checks, skills: 'copilot', global: true });
+    expect(checks).not.toHaveBeenCalled();
+    expect(existsSync(path.join(home, '.copilot/skills/testpilot/SKILL.md'))).toBe(
+        true,
+    );
+    expect(existsSync(path.join(cwd, '.testpilot'))).toBe(false);
+    expect(printed()).toContain('installed ~/.copilot/skills/testpilot/');
 });

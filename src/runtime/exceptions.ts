@@ -1,8 +1,24 @@
 /** Shared application exceptions. */
 
+import type { ErrorCode } from '../error-codes.ts';
+
 /** Base exception for all pipeline stage failures. */
 export class PipelineError extends Error {
     override name = 'PipelineError';
+
+    /** The stable code of this failure; see `ERROR_CODES`. */
+    readonly code: ErrorCode;
+
+    /**
+     * Initialize with the failure's code.
+     *
+     * @param message - What went wrong.
+     * @param options - The `code` of the failure, and its `cause` if any.
+     */
+    constructor(message: string, options: ErrorOptions & { code: ErrorCode }) {
+        super(message, options);
+        this.code = options.code;
+    }
 }
 
 /** Raised when the Structurer cannot produce a valid TestCase. */
@@ -51,6 +67,11 @@ export class ConfigurationError extends Error {
 /** Raised when `config.json` holds an API key, which is only read from the environment. */
 export class ApiKeyInConfigError extends ConfigurationError {
     override name = 'ApiKeyInConfigError';
+}
+
+/** Raised when a required Azure OpenAI setting is not set. */
+export class MissingSettingsError extends ConfigurationError {
+    override name = 'MissingSettingsError';
 }
 
 /**
