@@ -91,8 +91,10 @@ interface OutputHolder {
  * @param paths - The outputs.
  * @param source - The input, as the outputs' JSON records it.
  * @returns The reservation; dispose of it once both outputs are written.
- * @throws {OutputConflictError} If another run that is still going holds them.
- * @throws {NodeJS.ErrnoException} What kept the lock file from being created.
+ * @throws {OutputConflictError} If another run that is still going holds them,
+ *   or one that has stopped left a lock that cannot be removed.
+ * @throws {NodeJS.ErrnoException} What kept the lock file from being created
+ *   or read.
  */
 async function reserveOutputs(
     paths: OutputPaths,
@@ -104,7 +106,15 @@ async function reserveOutputs(
     for (;;) {
         try {
             await writeFile(lock, JSON.stringify(holder), { flag: 'wx' });
-            return { [Symbol.asyncDispose]: () => unlink(lock).catch(() => undefined) };
+            return {
+                [Symbol.asyncDispose]: () =>
+                    removeLock(lock).catch((error: unknown) => {
+                        logger.warning(
+                            `Cannot remove ${shown(lock)}; the next run will take it ` +
+                                `over: ${errorMessage(error)}`,
+                        );
+                    }),
+            };
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
                 throw error;
@@ -122,7 +132,32 @@ async function reserveOutputs(
                     `run is going, delete ${shown(lock)}`,
             );
         }
-        await unlink(lock).catch(() => undefined);
+        try {
+            await removeLock(lock);
+        } catch (error) {
+            // Retrying would meet the same lock forever.
+            throw new OutputConflictError(
+                `${shown(paths.testCase)} is reserved by a run that has stopped, and ` +
+                    `its lock cannot be removed: ${errorMessage(error)}. ` +
+                    `Delete ${shown(lock)}`,
+                { cause: error },
+            );
+        }
+    }
+}
+
+/**
+ * Delete a lock file; one already gone is not an error.
+ *
+ * @throws {NodeJS.ErrnoException} What kept the lock file from being deleted.
+ */
+async function removeLock(lock: string): Promise<void> {
+    try {
+        await unlink(lock);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            throw error;
+        }
     }
 }
 
@@ -133,6 +168,7 @@ async function reserveOutputs(
  * @returns Its holder, if it is still running; `undefined` if the lock records
  *   none but may be being written; `'stale'` if it is gone, its holder has
  *   stopped, or it was left unwritten.
+ * @throws {NodeJS.ErrnoException} If the lock exists but cannot be read.
  */
 async function lockHolder(lock: string): Promise<OutputHolder | 'stale' | undefined> {
     let text: string;
@@ -142,8 +178,13 @@ async function lockHolder(lock: string): Promise<OutputHolder | 'stale' | undefi
             readFile(lock, 'utf8'),
             stat(lock),
         ]);
-    } catch {
-        return 'stale';
+    } catch (error) {
+        // Gone: its holder released it. Any other failure says nothing of the
+        // holder, so the lock is not taken over.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            return 'stale';
+        }
+        throw error;
     }
     let recorded: Partial<OutputHolder> = {};
     try {

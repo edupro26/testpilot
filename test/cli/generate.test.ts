@@ -355,6 +355,34 @@ test('Smoke test', async ({ page }) => {
         expect(existsSync(lock)).toBe(false);
     });
 
+    test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+        "a stopped run's lock that cannot be removed is reported, not retried",
+        async () => {
+            const tests = path.join('.testpilot', 'tests');
+            await mkdir(tests, { recursive: true });
+            const { pid } = spawnSync(process.execPath, ['-e', '']);
+            const lock = path.join(tests, 'case.json.lock');
+            await writeFile(lock, JSON.stringify({ pid, source: 'other/case.md' }));
+            await chmod(tests, 0o555);
+            try {
+                const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json']);
+
+                expect(exitCode).toBe(2);
+                expect(stderr()).toContain(
+                    `OUTPUT_CONFLICT: ${path.join(tests, 'case.json')} is reserved ` +
+                        'by a run that has stopped, and its lock cannot be removed',
+                );
+                expect(stderr()).toContain(`Delete ${lock}`);
+                expect(JSON.parse(stdout())).toMatchObject({
+                    exitCode: 2,
+                    error: { code: 'OUTPUT_CONFLICT' },
+                });
+            } finally {
+                await chmod(tests, 0o755);
+            }
+        },
+    );
+
     test('the same input, or JSON that records no source, is overwritten', async () => {
         expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
         fakePipeline(SMOKE_SCRIPT);
