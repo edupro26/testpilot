@@ -2,7 +2,7 @@
 
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseEnv } from 'node:util';
 
@@ -133,6 +133,32 @@ test('updateDotenv appends on a new line and indents like the original', () => {
     expect(updateDotenv('  A=old\nB=2\n', { A: '$&' })).toBe('  A=$&\nB=2\n');
 });
 
+test('updateDotenv leaves the lines inside another quoted value alone', () => {
+    const before =
+        'APP_TEXT="first\nTESTPILOT_AZURE_OPENAI_ENDPOINT=inside\nlast" # note\n' +
+        "MULTI='a\nb'\n" +
+        'OPEN="never closed\nTESTPILOT_AZURE_MODEL_NAME=old\n';
+    const after = updateDotenv(before, {
+        TESTPILOT_AZURE_OPENAI_ENDPOINT: 'https://new/',
+        MULTI: 'one',
+        TESTPILOT_AZURE_MODEL_NAME: 'gpt',
+    });
+    expect(after).toBe(
+        'APP_TEXT="first\nTESTPILOT_AZURE_OPENAI_ENDPOINT=inside\nlast" # note\n' +
+            'MULTI=one\n' +
+            'OPEN="never closed\nTESTPILOT_AZURE_MODEL_NAME=gpt\n' +
+            'TESTPILOT_AZURE_OPENAI_ENDPOINT=https://new/\n',
+    );
+    // An unclosed quote is read as the rest of its line, so the next line counts.
+    expect({ ...parseEnv(after) }).toEqual({
+        APP_TEXT: 'first\nTESTPILOT_AZURE_OPENAI_ENDPOINT=inside\nlast',
+        MULTI: 'one',
+        OPEN: '"never closed',
+        TESTPILOT_AZURE_MODEL_NAME: 'gpt',
+        TESTPILOT_AZURE_OPENAI_ENDPOINT: 'https://new/',
+    });
+});
+
 test('parseSave accepts dotenv and dotenv:<path> only', () => {
     expect(parseSave('dotenv')).toBe('');
     expect(parseSave('dotenv:config/.env')).toBe('config/.env');
@@ -183,6 +209,29 @@ test('--prompt-api-key writes only the key to .env.local, and never prints it', 
     expect(stdout()).toBe('updated .env.local (TESTPILOT_AZURE_OPENAI_API_KEY)\n');
     expect(stdout() + stderr()).not.toContain('sk-secret-9999');
 });
+
+test.skipIf(process.platform === 'win32')(
+    '--prompt-api-key makes an existing dotenv file readable by its owner only',
+    async () => {
+        await writeFile('.env.local', 'APP_SECRET=keep\n');
+        await chmod('.env.local', 0o644);
+        await configSetAzureOpenAICommand(
+            { promptApiKey: true },
+            { isInteractive: () => true, readSecret: () => Promise.resolve('sk-1') },
+        );
+        expect((await stat('.env.local')).mode & 0o777).toBe(0o600);
+    },
+);
+
+test.skipIf(process.platform === 'win32')(
+    'writing values without the key leaves a dotenv file as readable as it was',
+    async () => {
+        await writeFile('.env.local', 'APP_SECRET=keep\n');
+        await chmod('.env.local', 0o644);
+        await configSetAzureOpenAICommand({ endpoint: 'https://x/', save: '' });
+        expect((await stat('.env.local')).mode & 0o777).toBe(0o644);
+    },
+);
 
 test('--save=dotenv:<path> writes the values there too, relative to the working directory', async () => {
     await mkdir('sub');

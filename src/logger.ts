@@ -123,4 +123,8 @@ export const logger = {
     error: (message: string, error?: unknown): void => {
         emit('ERROR', message, error);
     },
+    /** Log `message` as `error` does, whatever the level, e.g. why a command failed. */
+    alwaysError: (message: string, error?: unknown): void => {
+        emit('ERROR', message, error, true);
+    },
 };

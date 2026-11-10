@@ -77,6 +77,14 @@ export const ERROR_CODES = {
             'The log folder could not be created. Check the permissions on ' +
             '.testpilot/logs/ and the free disk space.',
     },
+    OUTPUT_CONFLICT: {
+        exitCode: 2,
+        hint:
+            'Another markdown file with the same name was generated before, and ' +
+            'this run would overwrite its script and test case JSON, which are ' +
+            'named after the file. Rename one of the two files; if the other test ' +
+            'case is gone, delete the JSON the message names.',
+    },
     LLM_UNREACHABLE: {
         exitCode: 1,
         hint:

@@ -1,7 +1,7 @@
 /** Tests for installing the bundled skill into a project or the user's home. */
 
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -100,6 +100,31 @@ test('a current project copy passes and a stale user copy warns with -g', async 
         },
     ]);
 });
+
+test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a copy that cannot be read is a warning, not a crash',
+    async () => {
+        const dir = skillDir({ agent: 'agents', global: false }, { cwd, home });
+        await installSkill(dir, source);
+        await chmod(path.join(dir, 'references'), 0o000);
+        try {
+            expect(await checkSkills({ cwd, home }, source)).toEqual([
+                {
+                    name: 'Skill',
+                    status: 'warn',
+                    detail: expect.stringMatching(
+                        /^\.agents\/skills\/testpilot cannot be read: EACCES/,
+                    ) as unknown,
+                    fix:
+                        "check the folder's permissions, or replace it: " +
+                        'testpilot init --skills',
+                },
+            ]);
+        } finally {
+            await chmod(path.join(dir, 'references'), 0o755);
+        }
+    },
+);
 
 test('an extra file in the copy makes it differ', async () => {
     const dir = skillDir({ agent: 'claude', global: false }, { cwd, home });

@@ -201,10 +201,12 @@ test('Smoke test', async ({ page }) => {
         const persisted = JSON.parse(
             await readFile(path.join(testsDir, 'case.json'), 'utf8'),
         ) as {
+            source: string;
             modules: {
                 execution_steps: { statements: { code: string; type: string }[] }[];
             }[];
         };
+        expect(persisted.source).toBe('automation/case.md');
         const steps = persisted.modules[0]?.execution_steps ?? [];
         expect(steps.map((step) => step.statements.map((s) => s.code))).toEqual([
             [CLICK],
@@ -248,6 +250,65 @@ test('Smoke test', async ({ page }) => {
         expect(outputPaths('login.md', '/p', '/abs/specs').spec).toBe(
             path.resolve('/abs/specs/login.spec.ts'),
         );
+    });
+
+    test('an input with the name of another one is refused before the run', async () => {
+        expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
+        const json = path.join('.testpilot', 'tests', 'case.json');
+        const before = await readFile(json, 'utf8');
+        await mkdir('other');
+        await writeFile(path.join('other', 'case.md'), '# Another test');
+        const firstRun = stdout().length;
+
+        expect(await runCli(['generate', 'other/case.md', '--json'])).toBe(2);
+
+        expect(stderr()).toContain(
+            `OUTPUT_CONFLICT: ${json} was generated from automation/case.md; ` +
+                'generating other/case.md would overwrite it and its script',
+        );
+        expect(JSON.parse(stdout().slice(firstRun))).toMatchObject({
+            exitCode: 2,
+            log: null,
+            error: { code: 'OUTPUT_CONFLICT', type: 'OutputConflictError' },
+        });
+        expect(await readFile(json, 'utf8')).toBe(before);
+        expect(await readdir('.testpilot/logs')).toHaveLength(1);
+    });
+
+    test('the same input, or JSON that records no source, is overwritten', async () => {
+        expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
+        fakePipeline(SMOKE_SCRIPT);
+        expect(await runCli(['generate', 'automation/case.md'])).toBe(0);
+
+        await writeFile(path.join('.testpilot', 'tests', 'case.json'), '{}');
+        await writeFile('case.md', '# Smoke test');
+        fakePipeline(SMOKE_SCRIPT);
+        expect(await runCli(['generate', 'case.md'])).toBe(0);
+    });
+
+    test('a log file that cannot be created is a warning, and no log is reported', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            vi.setSystemTime(new Date(2026, 10, 7, 9, 5, 3));
+            // A folder where the log file goes.
+            await mkdir(logFilePath('.', 'case', new Date()), { recursive: true });
+
+            const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json']);
+
+            expect(exitCode).toBe(0);
+            expect(JSON.parse(stdout())).toMatchObject({
+                status: 'success',
+                log: null,
+            });
+            expect(stderr()).toContain('Cannot create the log file');
+            expect(stderr()).not.toContain('Log: ');
+
+            fakePipeline(SMOKE_SCRIPT);
+            expect(await runCli(['generate', 'automation/case.md'])).toBe(0);
+            expect(stdout()).toContain('log: (none)\n');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     test('each run writes a log file, and prints its path', async () => {
@@ -448,6 +509,36 @@ test('Smoke test', async ({ page }) => {
 
         expect(stderr()).toContain('Turn 7');
         expect(stderr()).not.toContain('Waiting for');
+    });
+
+    test('the heartbeat is logged whatever the log level', async () => {
+        vi.stubEnv('TESTPILOT_LOG_LEVEL', 'WARNING');
+        expect(await runSlowStep(() => undefined)).toBe(0);
+
+        const heartbeats = stderr()
+            .split('\n')
+            .filter((line) => line.includes('Waiting for'));
+        expect(heartbeats).toHaveLength(2);
+    });
+
+    test('the code and hint of a failure are logged whatever the log level', async () => {
+        const [exitCode] = await runPipeline(
+            SMOKE_SCRIPT,
+            ['--log-level=critical'],
+            () => {
+                fakes.runStep = vi
+                    .fn<NonNullable<typeof fakes.runStep>>()
+                    .mockRejectedValueOnce(
+                        new ExtractorError('out of turns', {
+                            code: 'STEP_OUT_OF_TURNS',
+                        }),
+                    );
+            },
+        );
+
+        expect(exitCode).toBe(1);
+        expect(stderr()).toContain('STEP_OUT_OF_TURNS: out of turns');
+        expect(stderr()).toContain(`Hint: ${ERROR_CODES.STEP_OUT_OF_TURNS.hint}`);
     });
 
     test('a missing input file is a usage error', async () => {

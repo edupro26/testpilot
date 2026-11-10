@@ -12,9 +12,9 @@ import {
     findProjectRoot,
     readConfigObject,
 } from '../config.ts';
-import { ConfigurationError } from '../runtime/exceptions.ts';
+import { ConfigurationError, errorMessage } from '../runtime/exceptions.ts';
 import { type Check, findPlaywrightConfig, formatChecks, runChecks } from './doctor.ts';
-import { CliExit } from './errors.ts';
+import { CliExit, fail } from './errors.ts';
 import { installSkill, shownSkillPath, type SkillAgent, skillDir } from './skills.ts';
 
 /** The check `init` does not stop on: the LLM is configured after `init`. */
@@ -71,7 +71,7 @@ function stripComments(text: string): string {
  *   for, whether that copy is the user's, and the home folder (the user's by
  *   default).
  * @throws {CliExit} With status 2, before writing `.testpilot/`, if a check
- *   other than the LLM settings failed.
+ *   other than the LLM settings failed, or the skill cannot be installed.
  */
 export async function initCommand(
     options: {
@@ -117,14 +117,29 @@ export async function initCommand(
     printAfterChecks(lines);
 }
 
-/** Install the skill and say where, relative to the project or `~`. */
+/**
+ * Install the skill and say where, relative to the project or `~`.
+ *
+ * @throws {CliExit} With status 2, if the skill folder cannot be replaced.
+ */
 async function installSkillLine(
     target: { agent: SkillAgent; global: boolean },
     places: { cwd: string; home: string },
 ): Promise<string> {
     const destination = skillDir(target, places);
-    const status = await installSkill(destination);
-    return `${status} ${shownSkillPath(target, places)}/`;
+    const shown = `${shownSkillPath(target, places)}/`;
+    let status: 'installed' | 'updated';
+    try {
+        status = await installSkill(destination);
+    } catch (error) {
+        fail(
+            `Cannot install the skill in ${shown}: ${errorMessage(error)}. Check ` +
+                'that you can write to the folder, then run the command again',
+            error,
+            2,
+        );
+    }
+    return `${status} ${shown}`;
 }
 
 /** Print what init did, after the checks and set apart from them. */

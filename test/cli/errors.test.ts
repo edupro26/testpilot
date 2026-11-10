@@ -1,7 +1,12 @@
 import { APIConnectionError } from 'openai';
 import { expect, test } from 'vitest';
 
-import { errorCodeFor, exitCodeFor, LogFolderError } from '../../src/cli/errors.ts';
+import {
+    errorCodeFor,
+    exitCodeFor,
+    LogFolderError,
+    OutputConflictError,
+} from '../../src/cli/errors.ts';
 import { UsageError } from '../../src/cli/errors.ts';
 import { ERROR_CODES } from '../../src/error-codes.ts';
 import {
@@ -19,7 +24,7 @@ function status(code: number): Error {
 }
 
 test('every code has an exit code and a hint', () => {
-    expect(Object.keys(ERROR_CODES)).toHaveLength(20);
+    expect(Object.keys(ERROR_CODES)).toHaveLength(21);
     for (const { exitCode, hint } of Object.values(ERROR_CODES)) {
         expect([1, 2]).toContain(exitCode);
         expect(hint.length).toBeGreaterThan(0);
@@ -29,6 +34,7 @@ test('every code has an exit code and a hint', () => {
 test.each([
     [new UsageError('x'), 'INPUT_NOT_FOUND'],
     [new LogFolderError('x', { cause: new Error('EACCES') }), 'LOG_DIR_FAILED'],
+    [new OutputConflictError('x'), 'OUTPUT_CONFLICT'],
     [new ApiKeyInConfigError('x'), 'API_KEY_IN_CONFIG'],
     [new MissingSettingsError('x'), 'LLM_SETTINGS_MISSING'],
     [new ConfigurationError('x'), 'CONFIG_INVALID'],

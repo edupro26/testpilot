@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { cp, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 
+import { errorMessage } from '../runtime/exceptions.ts';
 import type { Check } from './doctor.ts';
 
 /** The agents `init --skills` installs for: the shared folder or one agent's own. */
@@ -121,8 +122,9 @@ export async function sameSkill(
  * @param places - The project root and the user's home folder.
  * @param source - The folder to compare with; the bundled skill by default.
  * @returns One result per copy found, in the six targets' order: ok if it is
- *   the same, else an "is outdated" warning with the command that updates it.
- *   Nothing if no copy is installed.
+ *   the same, else an "is outdated" warning with the command that updates it,
+ *   or a "cannot be read" warning if it cannot be compared. Nothing if no copy
+ *   is installed.
  */
 export async function checkSkills(
     places: { cwd: string; home: string },
@@ -137,8 +139,22 @@ export async function checkSkills(
                 continue;
             }
             const shown = shownSkillPath(target, places);
+            let same: boolean;
+            try {
+                same = await sameSkill(destination, source);
+            } catch (error) {
+                checks.push({
+                    name: 'Skill',
+                    status: 'warn',
+                    detail: `${shown} cannot be read: ${errorMessage(error)}`,
+                    fix:
+                        "check the folder's permissions, or replace it: " +
+                        initSkillCommand(target),
+                });
+                continue;
+            }
             checks.push(
-                (await sameSkill(destination, source))
+                same
                     ? { name: 'Skill', status: 'ok', detail: shown }
                     : {
                           name: 'Skill',

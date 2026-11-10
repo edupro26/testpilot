@@ -1,7 +1,7 @@
 /** Tests for the init command: setting a project up for testpilot. */
 
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -234,6 +234,29 @@ test('init --skills installs before the checks, so they see the new copy', async
     expect(printed()).toContain('Skill: .agents/skills/testpilot');
     expect(printed()).toContain('updated .agents/skills/testpilot/');
 });
+
+test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a skill folder that cannot be replaced exits 2 with the fix',
+    async () => {
+        const cwd = await project();
+        const skills = path.join(cwd, '.agents/skills');
+        await mkdir(path.join(skills, 'testpilot'), { recursive: true });
+        await chmod(skills, 0o555);
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+            await expect(
+                initCommand({ cwd, checks: checks(), skills: 'agents' }),
+            ).rejects.toMatchObject({ exitCode: 2 });
+            expect(errors.mock.calls.join('\n')).toContain(
+                'Cannot install the skill in .agents/skills/testpilot/: EACCES',
+            );
+            expect(existsSync(path.join(cwd, '.testpilot'))).toBe(false);
+        } finally {
+            errors.mockRestore();
+            await chmod(skills, 0o755);
+        }
+    },
+);
 
 test('init --skills -g installs for the user only, outside any project', async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), 'testpilot-'));

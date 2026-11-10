@@ -200,7 +200,7 @@ skills/testpilot/
 - It runs `doctor`, `config list`, `init` and `config set-azure-openai` with non-secret values freely, but asks before every `npx` or `npm` command and before `init --skills`.
 - It never handles the API key. VS Code Copilot runs commands in a real integrated terminal (`isTTY` is true), so the TTY check cannot stop it; the rule does: the developer runs `testpilot config set-azure-openai --prompt-api-key` in their own terminal.
 
-**Error codes and hints.** Every `generate` failure after the arguments parse has one of 20 stable codes (`UPPER_SNAKE_CASE`) with a fixed exit code and a static hint, catalogued in `ERROR_CODES` (`src/error-codes.ts`). `generate --json` reports `code` and `hint` in `error`; without `--json` the final error line is `CODE: message` followed by `Hint: <hint>`. Every `PipelineError` carries its code, set where it is thrown; `errorCodeFor` (`src/cli/errors.ts`) classifies everything else by walking the `cause` chain. `skills/testpilot/references/errors.md` maps each code to its cause and fix.
+**Error codes and hints.** Every `generate` failure after the arguments parse has one of 21 stable codes (`UPPER_SNAKE_CASE`) with a fixed exit code and a static hint, catalogued in `ERROR_CODES` (`src/error-codes.ts`). `generate --json` reports `code` and `hint` in `error`; without `--json` the final error line is `CODE: message` followed by `Hint: <hint>`. Every `PipelineError` carries its code, set where it is thrown; `errorCodeFor` (`src/cli/errors.ts`) classifies everything else by walking the `cause` chain. `skills/testpilot/references/errors.md` maps each code to its cause and fix.
 
 **The task-B gaps task C settled:**
 

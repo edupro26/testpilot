@@ -47,6 +47,11 @@ export class LogFolderError extends Error {
     override name = 'LogFolderError';
 }
 
+/** A run would overwrite the outputs of another input with the same name. */
+export class OutputConflictError extends Error {
+    override name = 'OutputConflictError';
+}
+
 /** `error` and its `cause` chain, outermost first; ends at a repeat or a non-Error. */
 function causeChain(error: unknown): Error[] {
     const chain: Error[] = [];
@@ -74,6 +79,7 @@ const CODE_RULES: readonly [
 ][] = [
     [(error) => error instanceof UsageError, () => 'INPUT_NOT_FOUND'],
     [(error) => error instanceof LogFolderError, () => 'LOG_DIR_FAILED'],
+    [(error) => error instanceof OutputConflictError, () => 'OUTPUT_CONFLICT'],
     [(error) => error instanceof ApiKeyInConfigError, () => 'API_KEY_IN_CONFIG'],
     [(error) => error instanceof MissingSettingsError, () => 'LLM_SETTINGS_MISSING'],
     [(error) => error instanceof ConfigurationError, () => 'CONFIG_INVALID'],
@@ -126,6 +132,8 @@ export function exitCodeFor(error: unknown): 1 | 2 {
 /**
  * Log `message` as a single clear error and end with `exitCode`.
  *
+ * The error is logged whatever the log level.
+ *
  * @param message - The one-line description of the failure.
  * @param error - The failure, kept as the exit's `cause`.
  * @param exitCode - The status the process should exit with.
@@ -138,16 +146,14 @@ export function fail(
     exitCode: number,
     traceback = false,
 ): never {
-    if (traceback) {
-        logger.error(message, error);
-    } else {
-        logger.error(message);
-    }
+    logger.alwaysError(message, traceback ? error : undefined);
     throw new CliExit(exitCode, { cause: error });
 }
 
 /**
  * Log a failure as `CODE: message` and its hint, and end with the code's exit status.
+ *
+ * Both lines are logged whatever the log level.
  *
  * @param message - The one-line description of the failure.
  * @param error - The failure, classified by `errorCodeFor` and kept as the
@@ -158,12 +164,8 @@ export function failWithCode(message: string, error: unknown): never {
     const code = errorCodeFor(error);
     const { exitCode, hint } = ERROR_CODES[code];
     // A setup problem is the developer's to fix; its stack is only noise.
-    if (exitCode === 1) {
-        logger.error(`${code}: ${message}`, error);
-    } else {
-        logger.error(`${code}: ${message}`);
-    }
-    logger.error(`Hint: ${hint}`);
+    logger.alwaysError(`${code}: ${message}`, exitCode === 1 ? error : undefined);
+    logger.alwaysError(`Hint: ${hint}`);
     throw new CliExit(exitCode, { cause: error });
 }
 

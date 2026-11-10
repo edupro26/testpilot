@@ -1,6 +1,6 @@
 /** `testpilot generate`: turn a markdown test case into a Playwright script. */
 
-import { mkdir, stat } from 'node:fs/promises';
+import { appendFile, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { CONFIG_DIR, findProjectRoot, type SettingFlags } from '../config.ts';
@@ -10,6 +10,7 @@ import { errorMessage } from '../runtime/exceptions.ts';
 import {
     type OutputPaths,
     outputPaths,
+    outputSource,
     runPipeline,
     type RunProgress,
     type Stage,
@@ -20,6 +21,7 @@ import {
     failWithCode,
     loadSettingsOrFail,
     LogFolderError,
+    OutputConflictError,
     UsageError,
 } from './errors.ts';
 
@@ -63,7 +65,10 @@ export interface GenerateResult {
     spec: string | null;
     /** The validated test case JSON, absolute; `null` unless it was written. */
     testCase: string | null;
-    /** The run's log, absolute; `null` if the run failed before the log opened. */
+    /**
+     * The run's log, absolute; `null` if there is none: the run failed before
+     * the log opened, or the log file could not be created.
+     */
     log: string | null;
     error: {
         /** The stable error code, e.g. `STEP_OUT_OF_TURNS`; see `ERROR_CODES`. */
@@ -149,11 +154,11 @@ const WATCHDOG_TICK_MS = 5_000;
 const QUIET_LIMIT_MS = 10_000;
 
 /**
- * Log a line whenever the run has gone `QUIET_LIMIT_MS` without one, so a long
- * run never looks stuck: `Waiting for <stage> to finish: step <i> of <n>,
- * "<step>" (<s>s)` while a step is extracted, else without the step number or
- * the step, where `<s>` is the time since the last line that was not the
- * watchdog's. A line comes at most `QUIET_LIMIT_MS` plus one tick (15 seconds)
+ * Log a line, whatever the log level, whenever the run has gone `QUIET_LIMIT_MS`
+ * without one, so a long run never looks stuck: `Waiting for <stage> to
+ * finish: step <i> of <n>, "<step>" (<s>s)` while a step is extracted, else
+ * without the step number or the step, where `<s>` is the time since the last
+ * line that was not the watchdog's. A line comes at most `QUIET_LIMIT_MS` plus one tick (15 seconds)
  * after the last.
  *
  * @param progress - The stage and step under way, named in the line.
@@ -173,7 +178,7 @@ function watchProgress(progress: RunProgress): NodeJS.Timeout {
             return;
         }
         const seconds = Math.round((now - quietSince) / 1000);
-        logger.info(`${progressLine(progress)} (${seconds}s)`);
+        logger.always(`${progressLine(progress)} (${seconds}s)`);
         ownLine = lastLineAt();
     }, WATCHDOG_TICK_MS);
     timer.unref();
@@ -208,18 +213,21 @@ function shown(file: string): string {
  * Run the full pipeline on a markdown test case.
  *
  * The run's log is written to `.testpilot/logs/`; its path is the first and
- * the last line logged, success or failure, whatever the log level. Results
- * go to standard output: the three paths, or with `--json` one JSON object
- * (for success and failure alike); progress and logs go to standard error,
- * where a `Waiting for <stage> to finish` line, naming the step and its number
- * while one is extracted, comes whenever 10 to 15 seconds pass without one.
+ * the last line logged, success or failure, whatever the log level. A log file
+ * that cannot be created is only a warning: the run goes on without one, and
+ * reports no log. Results go to standard output: the three paths, or with
+ * `--json` one JSON object (for success and failure alike); progress and logs
+ * go to standard error, where a `Waiting for <stage> to finish` line, naming
+ * the step and its number while one is extracted, comes whenever 10 to 15
+ * seconds pass without one, whatever the log level.
  *
  * @param markdownPath - The test case specification, relative to the working
  *   directory.
  * @param options - The command's flags; each overrides its setting for this run.
  * @throws {CliExit} With status 2 if the file is missing, the configuration
- *   is invalid or a setup problem (see `exitCodeFor`) stops the run, or 1 if
- *   a pipeline stage fails.
+ *   is invalid, the outputs belong to another input with the same name, or a
+ *   setup problem (see `exitCodeFor`) stops the run, or 1 if a pipeline stage
+ *   fails.
  */
 export async function generateCommand(
     markdownPath: string,
@@ -239,13 +247,18 @@ export async function generateCommand(
         }
         throw error;
     }
-    const log = run.log ?? '';
     if (options.json) {
-        printJson({ status: 'success', exitCode: 0, ...paths, log, error: null });
+        printJson({
+            status: 'success',
+            exitCode: 0,
+            ...paths,
+            log: run.log ?? null,
+            error: null,
+        });
     } else {
         process.stdout.write(
             `spec: ${shown(paths.spec)}\ntest case: ${shown(paths.testCase)}\n` +
-                `log: ${shown(log)}\n`,
+                `log: ${run.log === undefined ? '(none)' : shown(run.log)}\n`,
         );
     }
 }
@@ -267,6 +280,14 @@ async function generate(
     const root = findProjectRoot();
     const settings = loadSettingsOrFail(settingFlags(options));
     const paths = outputPaths(input, root, settings.scriptsDir);
+    const source = path.relative(root, input).split(path.sep).join(path.posix.sep);
+    const owner = await outputSource(paths);
+    if (owner !== undefined && owner !== source) {
+        const message =
+            `${shown(paths.testCase)} was generated from ${owner}; generating ` +
+            `${source} would overwrite it and its script`;
+        failWithCode(message, new OutputConflictError(message));
+    }
     run.paths = paths;
     const stem = path.basename(input, path.extname(input));
     const logFile = logFilePath(root, stem, new Date());
@@ -280,13 +301,25 @@ async function generate(
             errorMessage(error);
         failWithCode(message, new LogFolderError(message, { cause: error }));
     }
-    setLogFile(logFile);
-    run.log = logFile;
+    // Created before the run, so that a run reports a log only if it has one.
+    try {
+        await appendFile(logFile, '');
+        setLogFile(logFile);
+        run.log = logFile;
+    } catch (error) {
+        logger.warning(
+            `Cannot create the log file ${shown(logFile)}, so this run has none: ` +
+                errorMessage(error),
+        );
+    }
     const watchdog = watchProgress(run.progress);
     try {
-        logger.always(logLine);
+        if (run.log !== undefined) {
+            logger.always(logLine);
+        }
         await runPipeline(input, settings, {
             paths,
+            source,
             root,
             headed: options.headed,
             progress: run.progress,
@@ -295,7 +328,9 @@ async function generate(
         failWithCode(errorMessage(error), error);
     } finally {
         clearInterval(watchdog);
-        logger.always(logLine);
+        if (run.log !== undefined) {
+            logger.always(logLine);
+        }
         setLogFile(undefined);
     }
     return paths;

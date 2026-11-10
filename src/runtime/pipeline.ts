@@ -74,10 +74,38 @@ export interface RunProgress {
     stepCount?: number | undefined;
 }
 
+/**
+ * The input a test case's outputs were generated from, as their JSON records it.
+ *
+ * Two inputs with the same file name share their outputs, so a run checks this
+ * before it overwrites them.
+ *
+ * @param paths - The outputs.
+ * @returns The JSON's `source`; `undefined` if there is no JSON, it cannot be
+ *   read, or it records no source.
+ */
+export async function outputSource(paths: OutputPaths): Promise<string | undefined> {
+    let recorded: unknown;
+    try {
+        recorded = JSON.parse(await readFile(paths.testCase, 'utf8'));
+    } catch {
+        return undefined;
+    }
+    if (typeof recorded !== 'object' || recorded === null || !('source' in recorded)) {
+        return undefined;
+    }
+    return typeof recorded.source === 'string' ? recorded.source : undefined;
+}
+
 /** What `runPipeline` takes besides the input and the settings. */
 export interface PipelineOptions {
     /** Where to write the outputs. */
     paths: OutputPaths;
+    /**
+     * The input as the outputs' owner, recorded in the JSON as `source`: its path
+     * relative to the project root, with `/` separators.
+     */
+    source: string;
     /** The project root, under which Playwright MCP keeps its own output. */
     root: string;
     /** Show the browser the agent drives; the validation browser stays headless. */
@@ -89,9 +117,9 @@ export interface PipelineOptions {
 /**
  * Run the full pipeline on a markdown test case and persist its output.
  *
- * Writes the validated test case JSON and the generated script to
- * `options.paths`, creating their folders; the JSON is written before
- * generation, so a generation failure never loses it.
+ * Writes the validated test case JSON, with the input as its `source`, and the
+ * generated script to `options.paths`, creating their folders; the JSON is
+ * written before generation, so a generation failure never loses it.
  *
  * @param markdownPath - The test case specification.
  * @param settings - The application settings.
@@ -126,7 +154,8 @@ export async function runPipeline(
 
     const { spec, testCase: jsonPath } = options.paths;
     await mkdir(path.dirname(jsonPath), { recursive: true });
-    await writeFile(jsonPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+    const persisted = { source: options.source, ...result };
+    await writeFile(jsonPath, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8');
     logger.info(`Wrote validated test case to ${jsonPath}`);
 
     progress.stage = 'generate';

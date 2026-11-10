@@ -1,6 +1,6 @@
 /** `testpilot config`: inspect and change the settings testpilot resolves. */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { InvalidArgumentError } from 'commander';
@@ -131,9 +131,11 @@ export function parseSave(value: string): string {
 /**
  * Set variables in a dotenv file's text.
  *
- * An existing `KEY=` line (optionally `export KEY=`, optionally indented) is
- * replaced in place; keys that are missing are appended. Everything else is
- * kept byte for byte, and the file's line ending is kept.
+ * An existing `KEY=` assignment (optionally `export KEY=`, optionally indented)
+ * is replaced in place, a quoted value that spans lines included; keys that are
+ * missing are appended. A line inside another variable's quoted value is part of
+ * that value, never an assignment. Everything else is kept byte for byte, and
+ * the file's line ending is kept.
  *
  * @param text - The file's current content; empty if there is none.
  * @param values - The variables to set.
@@ -144,28 +146,82 @@ export function parseSave(value: string): string {
  */
 export function updateDotenv(text: string, values: Record<string, string>): string {
     const eol = text.includes('\r\n') ? '\r\n' : '\n';
-    const missing: string[] = [];
-    let result = text;
-    for (const [key, value] of Object.entries(values)) {
-        const line = new RegExp(
-            `^([ \\t]*(?:export[ \\t]+)?)${key}[ \\t]*=[^\\r\\n]*`,
-            'gm',
-        );
-        if (line.test(result)) {
-            line.lastIndex = 0;
-            result = result.replace(
-                line,
-                (_, lead: string) => `${lead}${key}=${quote(key, value)}`,
-            );
-        } else {
-            missing.push(`${key}=${quote(key, value)}`);
+    const lines = new Map(
+        Object.entries(values).map(([key, value]) => [
+            key,
+            `${key}=${quote(key, value)}`,
+        ]),
+    );
+    const replaced = new Set<string>();
+    let result = '';
+    let kept = 0;
+    for (const { lead, key, start, end } of dotenvAssignments(text)) {
+        const line = lines.get(key);
+        if (line !== undefined) {
+            result += `${text.slice(kept, start)}${lead}${line}`;
+            kept = end;
+            replaced.add(key);
         }
     }
+    result += text.slice(kept);
+    const missing = [...lines].filter(([key]) => !replaced.has(key));
     if (missing.length === 0) {
         return result;
     }
     const separator = result === '' || result.endsWith('\n') ? '' : eol;
-    return `${result}${separator}${missing.join(eol)}${eol}`;
+    return `${result}${separator}${missing.map(([, line]) => line).join(eol)}${eol}`;
+}
+
+// The start of an assignment: indent and `export `, the key, and `=` with the
+// blanks around it. A line that starts with `#` is a comment.
+const ASSIGNMENT = /^([ \t]*(?:export[ \t]+)?)([^\s#=][^=\r\n]*?)[ \t]*=[ \t]*/;
+
+/** One assignment in a dotenv file's text. */
+interface DotenvAssignment {
+    /** The indent and `export ` before the key. */
+    lead: string;
+    key: string;
+    /** Where the assignment starts: the start of its line. */
+    start: number;
+    /** Where it ends: the end of the line its value ends on, before the line break. */
+    end: number;
+}
+
+/**
+ * Every assignment in a dotenv file's text, as `node:util`'s `parseEnv` reads
+ * them: a value that opens a quote closed on a later line runs to the end of
+ * that line, so the lines in between are not assignments.
+ */
+function dotenvAssignments(text: string): DotenvAssignment[] {
+    const found: DotenvAssignment[] = [];
+    for (let start = 0; start < text.length;) {
+        let end = lineEnd(text, start);
+        const match = ASSIGNMENT.exec(text.slice(start, end));
+        if (match !== null) {
+            const [prefix, lead = '', key = ''] = match;
+            const valueStart = start + prefix.length;
+            const opening = text[valueStart];
+            if (opening === '"' || opening === "'" || opening === '`') {
+                const closing = text.indexOf(opening, valueStart + 1);
+                if (closing !== -1) {
+                    end = lineEnd(text, closing);
+                }
+            }
+            found.push({ lead, key, start, end });
+        }
+        const newline = text.indexOf('\n', end);
+        start = newline === -1 ? text.length : newline + 1;
+    }
+    return found;
+}
+
+/** The end of the line `index` is on, before its `\n` or `\r\n`. */
+function lineEnd(text: string, index: number): number {
+    const newline = text.indexOf('\n', index);
+    if (newline === -1) {
+        return text.length;
+    }
+    return newline > index && text[newline - 1] === '\r' ? newline - 1 : newline;
 }
 
 /**
@@ -219,8 +275,9 @@ export interface SetAzureDeps {
  * The given values are merged into `.testpilot/config.json` (which also gets
  * `llmProvider: azure_openai`). With `--save` they are written to a dotenv file
  * as well. With `--prompt-api-key` the API key is read with hidden input and
- * written to that dotenv file, `.env.local` by default, and nowhere else. A
- * value of the key is never printed.
+ * written to that dotenv file, `.env.local` by default, and nowhere else; the
+ * file is made readable by its owner only before the key goes in, whether it is
+ * new or not. A value of the key is never printed.
  *
  * The dotenv file is written before `config.json`. Afterwards the settings are
  * resolved again, and a warning on standard error names each variable written
@@ -316,6 +373,7 @@ export async function configSetAzureOpenAICommand(
                 text: updateDotenv(current, variables),
                 note: ` (${Object.keys(variables).join(', ')})`,
                 private: true,
+                holdsKey: apiKey !== undefined,
                 source: dotenvSource(root, dotenv),
                 variables: Object.keys(variables),
             });
@@ -341,10 +399,23 @@ export async function configSetAzureOpenAICommand(
         });
     }
 
-    for (const { file, text, note, private: isPrivate } of writes) {
+    for (const { file, text, note, private: isPrivate, holdsKey } of writes) {
+        if (holdsKey === true) {
+            try {
+                await restrictToOwner(file);
+            } catch (error) {
+                fail(
+                    `${display(cwd, file)}: cannot make it readable by its owner ` +
+                        `only, so the API key was not written: ${errorMessage(error)}`,
+                    error,
+                    2,
+                );
+            }
+        }
         try {
             await mkdir(path.dirname(file), { recursive: true });
-            // The mode only applies on creation; the dotenv file may hold the key.
+            // The mode only applies on creation; an existing file holding the key
+            // was restricted above.
             await writeFile(file, text, {
                 encoding: 'utf8',
                 ...(isPrivate === true ? { mode: 0o600 } : {}),
@@ -365,6 +436,8 @@ interface Write {
     note: string;
     /** Whether the file may hold the key, so is created readable by its owner only. */
     private?: boolean;
+    /** Whether the key is written: an existing file is restricted to its owner first. */
+    holdsKey?: boolean;
     /** The settings source the file is; `undefined` for one testpilot never reads. */
     source: SettingSource | undefined;
     variables: string[];
@@ -432,6 +505,17 @@ function warnIfOverridden(root: string, writes: Write[]): void {
                 `${variable} is still taken from ${describeSource(effective)}, which ` +
                     `overrides ${describeSource(source)}`,
             );
+        }
+    }
+}
+
+/** Make `file` readable and writable by its owner only, if it exists. */
+async function restrictToOwner(file: string): Promise<void> {
+    try {
+        await chmod(file, 0o600);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            throw error;
         }
     }
 }

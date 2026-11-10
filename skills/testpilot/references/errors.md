@@ -18,16 +18,17 @@ A failed run prints one JSON object on stdout and exits with a non-zero status.
 | `error.step` | The step being extracted, or whose replay failed. `null` when no step was involved. |
 | `error.message` | testpilot's own description of the failure. Quote it as it is. |
 | `error.type` | The error's class name, e.g. `ExtractorError`. Not useful to the developer. |
-| `log` | The run's log file, absolute. `null` when the run failed before the log opened (`INPUT_NOT_FOUND`, `CONFIG_INVALID`, `API_KEY_IN_CONFIG`, `LOG_DIR_FAILED`). |
+| `log` | The run's log file, absolute. `null` when there is no log: the run failed before the log opened (`INPUT_NOT_FOUND`, `CONFIG_INVALID`, `API_KEY_IN_CONFIG`, `OUTPUT_CONFLICT`, `LOG_DIR_FAILED`), or the log file could not be created, which stderr warns about. |
 | `testCase` | Usually `null`. After a failure in the `generate` stage it is the path of the validated test case JSON, which the run had already written. |
 | `spec` | Always `null` on a failure: no script was written. |
 
 Without `--json`, the same failure shows on stderr as `<CODE>: <message>` followed by
 a `Hint: <hint>` line. Once the run has opened its log, stderr also has a `Log: <path>`
 line at the start and another at the end; the failures that come before that
-(`INPUT_NOT_FOUND`, `CONFIG_INVALID`, `API_KEY_IN_CONFIG`, `LOG_DIR_FAILED`) have no
-log and print no `Log:` line. Only the `--json` result names the stage and the step as
-fields.
+(`INPUT_NOT_FOUND`, `CONFIG_INVALID`, `API_KEY_IN_CONFIG`, `OUTPUT_CONFLICT`,
+`LOG_DIR_FAILED`) have no log and print no `Log:` line, and neither does a run whose
+log file could not be created. Only the `--json` result names the stage and the step
+as fields.
 
 ## What you tell the developer
 
@@ -188,6 +189,24 @@ has the operating system's reason.
 
 **Fix:** the developer checks the permissions on `.testpilot/logs/` and the free disk
 space. The run stopped before it started, so there is no log.
+
+### `OUTPUT_CONFLICT`
+
+**Exit:** 2
+
+**Cause:** the outputs this run would write already belong to another markdown file
+with the same name, in another folder. testpilot names a test case's script and JSON
+after the input's file name, so the run would overwrite them. The message names the
+JSON and the input it was generated from.
+
+**Hint:** Another markdown file with the same name was generated before, and this run would overwrite its script and test case JSON, which are named after the file. Rename one of the two files; if the other test case is gone, delete the JSON the message names.
+
+**Fix:** the developer renames one of the two markdown files, or, if the other test
+case is no longer wanted, deletes the JSON the message names. The run stopped before
+it started, so there is no log.
+
+**In plain words:** two test cases have the same file name, and their generated
+scripts would end up in the same file.
 
 ## Failed runs (exit 1)
 
