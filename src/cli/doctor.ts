@@ -16,10 +16,8 @@ import {
 } from '../runtime/exceptions.ts';
 import { CHROMIUM_ARGS } from '../validator/browser.ts';
 import { CliExit } from './errors.ts';
+import { MIN_NODE_MAJOR, unsupportedNode } from './node-version.ts';
 import { checkSkills } from './skills.ts';
-
-/** The oldest Node.js major version testpilot runs on. */
-const MIN_NODE_MAJOR = 24;
 
 /** The testpilot clone, where its own Playwright and browser are installed. */
 const TESTPILOT_ROOT = path.resolve(import.meta.dirname, '..', '..');
@@ -44,8 +42,7 @@ export interface Check {
  * @returns A failure below the minimum major version.
  */
 export function checkNode(version: string): Check {
-    const major = Number(version.split('.')[0]);
-    return major >= MIN_NODE_MAJOR
+    return unsupportedNode(version) === undefined
         ? { name: 'Node.js', status: 'ok', detail: version }
         : {
               name: 'Node.js',

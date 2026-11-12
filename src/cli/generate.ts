@@ -1,6 +1,15 @@
 /** `testpilot generate`: turn a markdown test case into a Playwright script. */
 
-import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import {
+    link,
+    mkdir,
+    readFile,
+    rename,
+    stat,
+    unlink,
+    writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -76,9 +85,9 @@ const LOCK_WRITE_MS = 5_000;
 // taking over.
 const TAKEOVER_POLL_MS = 50;
 
-// The lock files this process holds, resolved. One that records this process
-// but is not held here was left by an earlier process given the same pid, as
-// each container's first process is.
+// The lock and guard files this process holds, resolved. One that records this
+// process but is not held here was left by an earlier process given the same
+// pid, as each container's first process is.
 const held = new Set<string>();
 
 /** Who holds a reservation of a test case's outputs, as its lock file records it. */
@@ -167,8 +176,8 @@ async function reserveOutputs(
  * guard, two runs that found the same stale lock could both remove it, the
  * second removing the first's new lock, and both would go on to write the
  * outputs. A run that finds the guard taken waits, then looks at the lock
- * again; a guard older than `LOCK_WRITE_MS` was left by a run that stopped
- * while taking over, and is removed.
+ * again; a guard whose run has stopped while taking over is cleared (see
+ * `clearStaleGuard`).
  *
  * @param lock - The lock file, found stale.
  * @throws {NodeJS.ErrnoException} What kept the guard from being created or
@@ -182,20 +191,87 @@ async function takeOver(lock: string): Promise<void> {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
             throw error;
         }
-        const taken = await stat(guard).catch(() => undefined);
-        if (taken !== undefined && Date.now() - taken.mtimeMs >= LOCK_WRITE_MS) {
-            await removeLock(guard);
-        } else {
+        if (!(await clearStaleGuard(guard))) {
             await sleep(TAKEOVER_POLL_MS);
         }
         return;
     }
+    held.add(path.resolve(guard));
     try {
         if ((await lockHolder(lock)) === 'stale') {
             await removeLock(lock);
         }
     } finally {
+        held.delete(path.resolve(guard));
         await removeLock(guard);
+    }
+}
+
+/**
+ * Remove a takeover guard whose run has stopped.
+ *
+ * The guard is judged by the run it records, not by its age, which a file
+ * server's clock can skew. It is moved aside before it is removed, and put back
+ * if it turns out to be one another run created meanwhile: removing it by name
+ * would remove that run's guard.
+ *
+ * @param guard - The guard file, found taken.
+ * @returns Whether it was stale and is now gone.
+ * @throws {NodeJS.ErrnoException} What kept the guard from being moved or
+ *   removed.
+ */
+async function clearStaleGuard(guard: string): Promise<boolean> {
+    const judged = await fileState(guard);
+    if (judged === undefined) {
+        return true;
+    }
+    const pid = Number(judged.text);
+    const stale =
+        judged.text === '' || !Number.isInteger(pid)
+            ? Date.now() - judged.mtimeMs >= LOCK_WRITE_MS
+            : !isHolding(pid, guard);
+    if (!stale) {
+        return false;
+    }
+    const aside = `${guard}.${randomUUID()}`;
+    try {
+        await rename(guard, aside);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            return true;
+        }
+        throw error;
+    }
+    const moved = await fileState(aside);
+    if (
+        moved !== undefined &&
+        (moved.ino !== judged.ino ||
+            moved.mtimeMs !== judged.mtimeMs ||
+            moved.text !== judged.text)
+    ) {
+        // Another run's new guard: put it back, unless a third run has
+        // created one since.
+        await link(aside, guard).catch(() => undefined);
+    }
+    await removeLock(aside);
+    return true;
+}
+
+/** A file's text, inode and modification time; `undefined` once it is gone. */
+async function fileState(
+    file: string,
+): Promise<{ text: string; ino: number; mtimeMs: number } | undefined> {
+    try {
+        const [text, { ino, mtimeMs }] = await Promise.all([
+            readFile(file, 'utf8'),
+            stat(file),
+        ]);
+        return { text, ino, mtimeMs };
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            return undefined;
+        }
+        throw error;
     }
 }
 

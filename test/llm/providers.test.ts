@@ -145,6 +145,29 @@ test('Azure conversation records a turn only once its request succeeds', async (
     ]);
 });
 
+test('Azure conversation says why a turn ended without an answer', async () => {
+    // Otherwise a refusal or a filtered reply reads as "(no text)".
+    const provider = new AzureOpenAIProvider(loadSettings(AZURE_ENV, NO_PROJECT));
+    const conversation = provider.startConversation({
+        systemPrompt: 'sys',
+        userPrompt: 'user',
+        tools: [],
+    });
+    azure.create
+        .mockResolvedValueOnce(reply({ refusal: 'I cannot help with that.' }))
+        .mockResolvedValueOnce({
+            choices: [
+                {
+                    finish_reason: 'content_filter',
+                    message: { role: 'assistant', content: null },
+                },
+            ],
+        });
+
+    expect((await conversation.send()).text).toBe('Refused: I cannot help with that.');
+    expect((await conversation.send()).text).toBe('(stopped by the content filter)');
+});
+
 test('mock provider returns fixed or computed responses', async () => {
     // A string is returned as-is, a function gets both prompts, default is ''.
     const fixed = new MockProvider('canned response');

@@ -12,6 +12,11 @@ import type {
 } from '../protocol.ts';
 import { OpenAIChatConversation } from './openai-chat.ts';
 
+// How long one request may take: a whole script from a reasoning model takes
+// minutes, but an endpoint that never answers should not hold a run for the
+// SDK's default of 10 minutes.
+const REQUEST_TIMEOUT_MS = 300_000;
+
 /** LLMProvider implementation backed by Azure OpenAI. */
 export class AzureOpenAIProvider implements LLMProvider {
     private readonly client: AzureOpenAI;
@@ -45,6 +50,10 @@ export class AzureOpenAIProvider implements LLMProvider {
             // Left out, it is read from OPENAI_BASE_URL, which the SDK refuses
             // alongside an endpoint.
             baseURL: null,
+            // RetryingLLMProvider retries rate limits; the SDK's own retries
+            // would multiply its attempts.
+            maxRetries: 0,
+            timeout: REQUEST_TIMEOUT_MS,
         });
         this.model = model;
         logger.debug(

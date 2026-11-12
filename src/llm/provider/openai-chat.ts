@@ -84,7 +84,8 @@ export class OpenAIChatConversation implements Conversation {
             tools: this.tools,
         });
         this.messages.push(...replies);
-        const message = response.choices[0]?.message;
+        const choice = response.choices[0];
+        const message = choice?.message;
         if (message === undefined) {
             return { text: null, toolCalls: [] };
         }
@@ -98,7 +99,7 @@ export class OpenAIChatConversation implements Conversation {
         });
 
         return {
-            text: message.content,
+            text: turnText(message.content, message.refusal, choice?.finish_reason),
             toolCalls: calls.map((call) => ({
                 id: call.id,
                 name: call.function.name,
@@ -106,6 +107,30 @@ export class OpenAIChatConversation implements Conversation {
             })),
         };
     }
+}
+
+/**
+ * A turn's text, saying why it ended when that was not the model's choice: a
+ * refusal, or a reply cut short.
+ */
+function turnText(
+    content: string | null,
+    refusal: string | null | undefined,
+    finishReason: string | undefined,
+): string | null {
+    if (refusal) {
+        return `Refused: ${refusal}`;
+    }
+    const cut =
+        finishReason === 'content_filter'
+            ? '(stopped by the content filter)'
+            : finishReason === 'length'
+              ? '(cut off at the output token limit)'
+              : undefined;
+    if (cut === undefined) {
+        return content;
+    }
+    return content ? `${content} ${cut}` : cut;
 }
 
 /** Parse a tool call's JSON arguments, tolerating an empty or bad payload. */

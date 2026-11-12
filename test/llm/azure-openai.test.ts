@@ -26,3 +26,17 @@ test('an OPENAI_BASE_URL in the environment does not override the endpoint', () 
         () => new AzureOpenAIProvider(loadSettings(AZURE_ENV, 'no-such-project')),
     ).not.toThrow();
 });
+
+test('the client leaves retries to testpilot, and bounds a request', () => {
+    // Its own retries would multiply ours; its 10-minute default could hang a
+    // run on an endpoint that never answers.
+    const provider = new AzureOpenAIProvider(
+        loadSettings(AZURE_ENV, 'no-such-project'),
+    );
+    const { client } = provider as unknown as {
+        client: { maxRetries: number; timeout: number };
+    };
+
+    expect(client.maxRetries).toBe(0);
+    expect(client.timeout).toBeLessThan(600_000);
+});

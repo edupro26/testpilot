@@ -71,3 +71,24 @@ test('gives up on other errors at once, and on rate limits eventually', async ()
     expect(complete).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledTimes(1);
 });
+
+test("waits as long as the rate limit's Retry-After asks, when that is longer", async () => {
+    // Azure says when its quota frees up; retrying sooner only fails again.
+    const limited = (retryAfter: string): Error =>
+        Object.assign(new Error('rate limited'), {
+            status: 429,
+            headers: new Headers({ 'retry-after': retryAfter }),
+        });
+    const complete = vi
+        .fn<(request: CompletionRequest) => Promise<string>>()
+        .mockRejectedValueOnce(limited('20'))
+        .mockRejectedValueOnce(limited('1'))
+        .mockResolvedValue('ok');
+    const sleep = vi
+        .fn<(seconds: number) => Promise<void>>()
+        .mockResolvedValue(undefined);
+    const wrapper = new RetryingLLMProvider(provider(complete), { sleep });
+
+    expect(await wrapper.complete({ systemPrompt: 's', userPrompt: 'u' })).toBe('ok');
+    expect(sleep.mock.calls.map(([seconds]) => seconds)).toEqual([20, 4]);
+});

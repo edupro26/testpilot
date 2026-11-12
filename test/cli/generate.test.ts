@@ -400,6 +400,7 @@ test('Smoke test', async ({ page }) => {
     });
 
     test('a takeover left by a run that stopped is cleared', async () => {
+        // Judged by its run, not its age: however new it looks.
         const tests = path.join('.testpilot', 'tests');
         await mkdir(tests, { recursive: true });
         const { pid } = spawnSync(process.execPath, ['-e', '']);
@@ -407,12 +408,30 @@ test('Smoke test', async ({ page }) => {
         const guard = `${lock}.takeover`;
         await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
         await writeFile(guard, String(pid));
-        const past = new Date(Date.now() - 60_000);
-        await utimes(guard, past, past);
 
         expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
         expect(existsSync(lock)).toBe(false);
         expect(existsSync(guard)).toBe(false);
+    });
+
+    test('a takeover by a run still going is waited for, however old', async () => {
+        // A file server's clock can make a guard just created look old.
+        const tests = path.join('.testpilot', 'tests');
+        await mkdir(tests, { recursive: true });
+        const { pid } = spawnSync(process.execPath, ['-e', '']);
+        const lock = path.join(tests, 'case.json.lock');
+        const guard = `${lock}.takeover`;
+        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
+        await writeFile(guard, String(process.ppid));
+        const past = new Date(Date.now() - 60_000);
+        await utimes(guard, past, past);
+
+        const run = runPipeline(SMOKE_SCRIPT);
+        await sleep(200);
+        expect(existsSync(guard)).toBe(true);
+        await unlink(guard);
+
+        expect((await run)[0]).toBe(0);
     });
 
     test('a reservation recording this process, which it does not hold, is taken over', async () => {
