@@ -1,8 +1,11 @@
-/** Retry wrapper: shields any LLMProvider from transient rate-limit errors. */
+/** Retry wrapper: shields any LLMProvider from transient errors. */
 
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { APIConnectionError, APIConnectionTimeoutError } from 'openai';
+
 import { logger } from '../logger.ts';
+import { errorMessage } from '../runtime/exceptions.ts';
 import type {
     CompletionRequest,
     Conversation,
@@ -24,6 +27,23 @@ const MAX_RETRY_AFTER_SECONDS = 60;
 /** Whether `error` looks like an HTTP 429 from any provider SDK. */
 function isRateLimit(error: unknown): boolean {
     return (error as { status?: unknown } | null)?.status === 429;
+}
+
+/**
+ * Whether `error` may not happen again: a rate limit, a 408, 409 or 5xx status,
+ * or a connection dropped before a response, as the OpenAI SDK's own retries
+ * judged it. A request that timed out is not retried: it already took the
+ * whole timeout, and another try would most likely take it again.
+ */
+function isTransient(error: unknown): boolean {
+    if (error instanceof APIConnectionError) {
+        return !(error instanceof APIConnectionTimeoutError);
+    }
+    const status = (error as { status?: unknown } | null)?.status;
+    return (
+        typeof status === 'number' &&
+        (status === 408 || status === 409 || status === 429 || status >= 500)
+    );
 }
 
 /**
@@ -55,8 +75,9 @@ export interface RetryOptions {
 /**
  * Wraps an LLMProvider, retrying `complete()` and conversation turns.
  *
- * Only rate-limit errors are retried; anything else is re-raised at once. A
- * retry waits out the backoff, or the Retry-After the error carries if longer.
+ * Only transient errors (see `isTransient`) are retried; anything else is
+ * re-raised at once. A retry waits out the backoff, or a rate limit's
+ * Retry-After if longer.
  */
 export class RetryingLLMProvider implements LLMProvider {
     readonly provider: LLMProvider;
@@ -80,11 +101,11 @@ export class RetryingLLMProvider implements LLMProvider {
     }
 
     /**
-     * Delegate to `provider.complete`, retrying on rate-limit errors.
+     * Delegate to `provider.complete`, retrying on transient errors.
      *
      * @returns The completion text from `provider`.
      * @throws {Error} Whatever `provider.complete` throws, after retries are exhausted
-     *   or immediately for a non-rate-limit error.
+     *   or immediately for an error that is not transient.
      */
     complete(request: CompletionRequest): Promise<string> {
         return this.withRetry(() => this.provider.complete(request));
@@ -101,10 +122,10 @@ export class RetryingLLMProvider implements LLMProvider {
     }
 
     /**
-     * Run `call`, retrying with exponential backoff on rate limits.
+     * Run `call`, retrying with exponential backoff on transient errors.
      *
      * @throws {Error} Whatever `call` throws, after retries are exhausted or
-     *   immediately for a non-rate-limit error.
+     *   immediately for an error that is not transient.
      */
     private async withRetry<T>(call: () => Promise<T>): Promise<T> {
         let wait = this.baseDelay;
@@ -113,12 +134,15 @@ export class RetryingLLMProvider implements LLMProvider {
             try {
                 return await call();
             } catch (error) {
-                if (!isRateLimit(error) || attempt >= this.maxAttempts) {
+                if (!isTransient(error) || attempt >= this.maxAttempts) {
                     throw error;
                 }
                 const seconds = Math.max(wait, retryAfter(error));
+                const reason = isRateLimit(error)
+                    ? 'Rate limited'
+                    : `LLM request failed (${errorMessage(error)})`;
                 logger.warning(
-                    `Rate limited (attempt ${attempt}/${this.maxAttempts}), ` +
+                    `${reason} (attempt ${attempt}/${this.maxAttempts}), ` +
                         `retrying in ${seconds.toFixed(0)}s`,
                 );
                 await this.sleep(seconds);
@@ -129,7 +153,7 @@ export class RetryingLLMProvider implements LLMProvider {
     }
 }
 
-/** Wraps a Conversation so each turn inherits rate-limit retries. */
+/** Wraps a Conversation so each turn inherits the retries. */
 export class RetryingConversation implements Conversation {
     readonly conversation: Conversation;
     private readonly retry: Retry;
@@ -145,7 +169,7 @@ export class RetryingConversation implements Conversation {
         this.retry = retry;
     }
 
-    /** Delegate to `conversation.send`, retrying on rate-limit errors. */
+    /** Delegate to `conversation.send`, retrying on transient errors. */
     send(results?: ToolResult[]): Promise<ToolUseResponse> {
         return this.retry(() => this.conversation.send(results));
     }

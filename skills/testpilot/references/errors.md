@@ -260,14 +260,18 @@ message does not explain it, say so and point to the log.
 
 **Exit:** 1
 
-**Cause:** the LLM answered, but its answer was not valid JSON or not the shape
-testpilot expects. It happens either in the `structure` stage, or in the `extract`
-stage, where the code for each step is judged; a `--json` result's stage says which.
+**Cause:** the LLM answered, but its answer cannot be used: it was not valid JSON or
+not the shape testpilot expects, or the model refused, or the reply was stopped by
+the content filter or cut off at the output token limit; the message says which. It
+happens in the `structure` stage, in the `extract` stage, where the code for each step
+is judged, or in the `generate` stage; a `--json` result's stage says which.
 
-**Hint:** The LLM answered with something that is not the expected JSON. This is usually a one-off: try again.
+**Hint:** The LLM answered with something testpilot cannot use: not the expected JSON, or a reply it refused, or that was filtered or cut off; the message says which. This is usually a one-off: try again.
 
 **Fix:** recommend running `generate` again, and wait for the developer's go-ahead. If
-it repeats, point to the log.
+it repeats, point to the log. If the message says the reply was cut off at the output
+token limit, a test case with fewer or shorter steps produces a shorter reply; if it
+was refused or filtered, the step text may be what the model objects to.
 
 **In plain words:** the model gave an answer testpilot could not read.
 
@@ -317,27 +321,14 @@ its last words, which usually say why.
 developer check the step against the page and reword it if it is ambiguous; you may
 suggest wording, but do not change the test case until they agree.
 
-### `STEP_REPORT_INVALID`
-
-**Exit:** 1
-
-**Cause:** the browser agent reported a finished step wrongly: the report was
-malformed, or it named a statement it never ran, and it still did after being
-asked to fix it.
-
-**Hint:** The agent reported the step wrongly: a malformed report, or a statement it never ran. This is usually a one-off: try again.
-
-**Fix:** recommend running `generate` again, and wait for the developer's go-ahead. If
-it repeats, point to the log.
-
-**In plain words:** the agent's report about a step was not usable.
-
 ### `STEP_VALIDATION_FAILED`
 
 **Exit:** 1
 
 **Cause:** a step still failed validation after the run spent its re-extractions (at
-most 5 per run). The message has the last failure; `error.step` is the step.
+most 5 per run). This includes a step the agent kept reporting wrongly (a malformed
+report, or a statement it never ran). The message has the last failure; `error.step`
+is the step.
 
 **Hint:** The step still failed validation after the run spent its retries; the message has the last failure. Make the step more specific, or check that the page behaves as the step says.
 

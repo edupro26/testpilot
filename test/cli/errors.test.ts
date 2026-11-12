@@ -24,7 +24,7 @@ function status(code: number): Error {
 }
 
 test('every code has an exit code and a hint', () => {
-    expect(Object.keys(ERROR_CODES)).toHaveLength(21);
+    expect(Object.keys(ERROR_CODES)).toHaveLength(20);
     for (const { exitCode, hint } of Object.values(ERROR_CODES)) {
         expect([1, 2]).toContain(exitCode);
         expect(hint.length).toBeGreaterThan(0);

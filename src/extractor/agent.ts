@@ -130,8 +130,8 @@ export class StepAgent {
      * @param options - The browser context, any retry feedback and the check.
      * @returns The step's statements, with the last rejection if the repairs
      *   ran out.
-     * @throws {ExtractorError} If the model never reports completion within
-     *   `maxTurns`, or reports a statement MCP never ran.
+     * @throws {ExtractorError} If the model stops without reporting completion,
+     *   or does not report it within `maxTurns`.
      */
     async run(
         step: string,
@@ -170,13 +170,6 @@ export class StepAgent {
             for (const call of response.toolCalls) {
                 if (call.name === STEP_DONE) {
                     const collected = collect(call.arguments, emitted, waits, step);
-                    if (collected.invalid !== undefined && repairs === MAX_REPAIRS) {
-                        throw new ExtractorError(
-                            `Step ${JSON.stringify(step)} was still reported wrongly ` +
-                                `after ${repairs} repair(s): ${collected.invalid}`,
-                            { code: 'STEP_REPORT_INVALID' },
-                        );
-                    }
                     const checked = await review(collected, check);
                     if (checked.rejection === undefined) {
                         logger.info(`Step complete after ${turn + 1} turn(s)`);
@@ -240,15 +233,17 @@ export class StepAgent {
 }
 
 /**
- * Check a collected report. One left empty by dropping its waits is rejected:
- * a verification step would otherwise pass as needing no interaction.
+ * Check a collected report. One that is invalid is rejected with none of its
+ * statements, so none of them can be kept. One left empty by dropping its waits
+ * is rejected: a verification step would otherwise pass as needing no
+ * interaction.
  */
 async function review(
     { statements, droppedWaits, invalid }: ReturnType<typeof collect>,
     check?: StepCheck,
 ): Promise<StepResult> {
     if (invalid !== undefined) {
-        return { statements, rejection: invalid };
+        return { statements: [], rejection: invalid };
     }
     if (statements.length === 0 && droppedWaits > 0) {
         return { statements, rejection: ONLY_WAITS };

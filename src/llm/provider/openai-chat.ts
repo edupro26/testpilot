@@ -121,16 +121,28 @@ function turnText(
     if (refusal) {
         return `Refused: ${refusal}`;
     }
-    const cut =
-        finishReason === 'content_filter'
-            ? '(stopped by the content filter)'
-            : finishReason === 'length'
-              ? '(cut off at the output token limit)'
-              : undefined;
+    const cut = cutReason(finishReason);
     if (cut === undefined) {
         return content;
     }
-    return content ? `${content} ${cut}` : cut;
+    return content ? `${content} (${cut})` : `(${cut})`;
+}
+
+/**
+ * Why a reply ended before the model finished it, from its `finish_reason`.
+ *
+ * @param finishReason - The choice's `finish_reason`.
+ * @returns The reason in words; `undefined` if the model ended it itself.
+ */
+export function cutReason(finishReason: string | null | undefined): string | undefined {
+    switch (finishReason) {
+        case 'content_filter':
+            return 'stopped by the content filter';
+        case 'length':
+            return 'cut off at the output token limit';
+        default:
+            return undefined;
+    }
 }
 
 /** Parse a tool call's JSON arguments, tolerating an empty or bad payload. */

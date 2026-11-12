@@ -196,24 +196,20 @@ test('a report without its statements goes back to the agent', async () => {
 
 describe('rejects a statement not emitted verbatim by a collectable tool', () => {
     // The verbatim rule is enforced in code, not merely prompted. A report
-    // breaking it goes back to the agent, and ends the run once its repairs
-    // run out; a statement that does not parse is our bug, and ends it at once.
+    // breaking it goes back to the agent; once its repairs run out, the step
+    // comes back rejected, with no statements, for the run to re-extract.
     test.each([
         {
             id: 'never-ran',
             tool: 'browser_click',
             ran: CLICK,
             reported: 'await page.evaluate("fetch(\'/admin\')");',
-            match: 'no collectable',
-            code: 'STEP_REPORT_INVALID',
         },
         {
             id: 'edited',
             tool: 'browser_click',
             ran: CLICK,
             reported: "await page.getByRole('link', { name: 'Signup' }).click();",
-            match: 'no collectable',
-            code: 'STEP_REPORT_INVALID',
         },
         {
             id: 'widened-truncated-locator',
@@ -222,26 +218,14 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
             reported:
                 "await expect(page.getByText('Your email or password is incorrect!'))" +
                 '.toBeVisible();',
-            match: 'no collectable',
-            code: 'STEP_REPORT_INVALID',
         },
         {
             id: 'non-collectable',
             tool: 'browser_evaluate',
             ran: EVALUATE,
             reported: EVALUATE,
-            match: 'no collectable',
-            code: 'STEP_REPORT_INVALID',
         },
-        {
-            id: 'does-not-parse',
-            tool: 'browser_click',
-            ran: 'await page.evaluate(() => {',
-            reported: 'await page.evaluate(() => {',
-            match: 'does not parse',
-            code: 'INTERNAL_ERROR',
-        },
-    ])('$id', async ({ tool, ran, reported, match, code }) => {
+    ])('$id', async ({ tool, ran, reported }) => {
         const mcp = new FakeMCP({ [tool]: new McpResult(false, emitted(ran)) });
         const llm = new MockProvider('', [
             toolTurn(tool, {}),
@@ -250,15 +234,29 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
             done(reported),
         ]);
 
+        const result = await new StepAgent(llm, mcp).run('Do the step', {
+            context: 'fresh',
+        });
+
+        expect(result.statements).toEqual([]);
+        expect(result.rejection).toMatch(/no collectable/);
+        const repairs = llm.conversations[0]!.sent.filter((sent) =>
+            sent.some((r) => r.content.includes('rejected')),
+        );
+        expect(repairs).toHaveLength(2);
+    });
+
+    test('a statement that does not parse is our bug, and ends the run at once', async () => {
+        const ran = 'await page.evaluate(() => {';
+        const mcp = new FakeMCP({ browser_click: new McpResult(false, emitted(ran)) });
+        const llm = new MockProvider('', [toolTurn('browser_click', {}), done(ran)]);
+
         const error = await new StepAgent(llm, mcp)
             .run('Do the step', { context: 'fresh' })
             .catch((e: unknown) => e);
-        expect(String(error)).toMatch(new RegExp(match));
-        expect((error as ExtractorError).code).toBe(code);
-        const repairs = llm.conversations[0]!.sent.filter((sent) =>
-            sent.some((result) => result.content.includes('rejected')),
-        );
-        expect(repairs).toHaveLength(code === 'STEP_REPORT_INVALID' ? 2 : 0);
+
+        expect(String(error)).toMatch(/does not parse/);
+        expect((error as ExtractorError).code).toBe('INTERNAL_ERROR');
     });
 });
 

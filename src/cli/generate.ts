@@ -10,6 +10,7 @@ import {
     unlink,
     writeFile,
 } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -85,6 +86,15 @@ const LOCK_WRITE_MS = 5_000;
 // taking over.
 const TAKEOVER_POLL_MS = 50;
 
+// How long a run waits for another run's takeover, which takes milliseconds,
+// before it gives up: the guard may be one left by a run killed mid-takeover,
+// whose pid a live process now has.
+const TAKEOVER_WAIT_MS = 3_000;
+
+// The host this process runs on. A pid means nothing outside its host: two
+// containers sharing a volume both run as pid 1.
+const HOST = hostname();
+
 // The lock and guard files this process holds, resolved. One that records this
 // process but is not held here was left by an earlier process given the same
 // pid, as each container's first process is.
@@ -96,6 +106,8 @@ interface OutputHolder {
     pid: number;
     /** The input it is generating, as the outputs' JSON records it. */
     source: string;
+    /** The host it runs on; absent from locks written before hosts were recorded. */
+    host?: string;
 }
 
 /**
@@ -104,14 +116,16 @@ interface OutputHolder {
  * write them in the meantime.
  *
  * The reservation is a lock file next to the JSON, `<stem>.json.lock`, which
- * records the run's process and input. One left behind by a run that no longer
- * exists is taken over (see `takeOver`).
+ * records the run's process, input and host. One left behind by a run that no
+ * longer exists is taken over (see `takeOver`); one made on another host is
+ * held, as its run cannot be checked from here.
  *
  * @param paths - The outputs.
  * @param source - The input, as the outputs' JSON records it.
  * @returns The reservation; dispose of it once both outputs are written.
  * @throws {OutputConflictError} If another run that is still going holds them,
- *   or one that has stopped left a lock that cannot be removed.
+ *   or one that has stopped left a lock that cannot be removed, or another
+ *   run's takeover of it has not ended within `TAKEOVER_WAIT_MS`.
  * @throws {NodeJS.ErrnoException} What kept the lock file from being created
  *   or read.
  */
@@ -120,8 +134,9 @@ async function reserveOutputs(
     source: string,
 ): Promise<AsyncDisposable> {
     const lock = `${paths.testCase}.lock`;
-    const holder: OutputHolder = { pid: process.pid, source };
+    const holder: OutputHolder = { pid: process.pid, source, host: HOST };
     await mkdir(path.dirname(lock), { recursive: true });
+    const deadline = Date.now() + TAKEOVER_WAIT_MS;
     for (;;) {
         try {
             await writeFile(lock, JSON.stringify(holder), { flag: 'wx' });
@@ -144,18 +159,23 @@ async function reserveOutputs(
         }
         const other = await lockHolder(lock);
         if (other !== 'stale') {
+            const on =
+                other?.host === undefined || other.host === HOST
+                    ? ''
+                    : ` on ${other.host}`;
             const by =
                 other === undefined
                     ? 'another run'
-                    : `${other.source} by another run (process ${other.pid})`;
+                    : `${other.source} by another run (process ${other.pid}${on})`;
             throw new OutputConflictError(
                 `${shown(paths.testCase)} is being generated from ${by}; generating ` +
                     `${source} now would overwrite it and its script. If no other ` +
                     `run is going, delete ${shown(lock)}`,
             );
         }
+        let blocked: boolean;
         try {
-            await takeOver(lock);
+            blocked = !(await takeOver(lock));
         } catch (error) {
             // Retrying would meet the same lock forever.
             throw new OutputConflictError(
@@ -163,6 +183,14 @@ async function reserveOutputs(
                     `its lock cannot be removed: ${errorMessage(error)}. ` +
                     `Delete ${shown(lock)}`,
                 { cause: error },
+            );
+        }
+        if (blocked && Date.now() >= deadline) {
+            throw new OutputConflictError(
+                `${shown(paths.testCase)} is reserved by a run that has stopped, and ` +
+                    'another run has been taking it over for ' +
+                    `${TAKEOVER_WAIT_MS / 1000} s. If no other run is going, ` +
+                    `delete ${shown(`${lock}.takeover`)}`,
             );
         }
     }
@@ -180,21 +208,26 @@ async function reserveOutputs(
  * `clearStaleGuard`).
  *
  * @param lock - The lock file, found stale.
+ * @returns False if another run's guard kept this one from looking at the lock
+ *   (it has waited `TAKEOVER_POLL_MS`), else true.
  * @throws {NodeJS.ErrnoException} What kept the guard from being created or
  *   removed, or the lock from being read or removed.
  */
-async function takeOver(lock: string): Promise<void> {
+async function takeOver(lock: string): Promise<boolean> {
     const guard = `${lock}.takeover`;
     try {
-        await writeFile(guard, String(process.pid), { flag: 'wx' });
+        await writeFile(guard, JSON.stringify({ pid: process.pid, host: HOST }), {
+            flag: 'wx',
+        });
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
             throw error;
         }
-        if (!(await clearStaleGuard(guard))) {
-            await sleep(TAKEOVER_POLL_MS);
+        if (await clearStaleGuard(guard)) {
+            return true;
         }
-        return;
+        await sleep(TAKEOVER_POLL_MS);
+        return false;
     }
     held.add(path.resolve(guard));
     try {
@@ -205,6 +238,7 @@ async function takeOver(lock: string): Promise<void> {
         held.delete(path.resolve(guard));
         await removeLock(guard);
     }
+    return true;
 }
 
 /**
@@ -225,11 +259,11 @@ async function clearStaleGuard(guard: string): Promise<boolean> {
     if (judged === undefined) {
         return true;
     }
-    const pid = Number(judged.text);
+    const run = guardRun(judged.text);
     const stale =
-        judged.text === '' || !Number.isInteger(pid)
+        run === undefined
             ? Date.now() - judged.mtimeMs >= LOCK_WRITE_MS
-            : !isHolding(pid, guard);
+            : !isHolding(run.pid, guard, run.host);
     if (!stale) {
         return false;
     }
@@ -255,6 +289,27 @@ async function clearStaleGuard(guard: string): Promise<boolean> {
     }
     await removeLock(aside);
     return true;
+}
+
+/**
+ * The run a takeover guard records: `{ pid, host }`, or a bare pid as guards
+ * written before hosts were recorded hold; `undefined` if it is not written yet.
+ */
+function guardRun(text: string): { pid: number; host?: string } | undefined {
+    let recorded: unknown;
+    try {
+        recorded = JSON.parse(text);
+    } catch {
+        return undefined;
+    }
+    if (Number.isInteger(recorded)) {
+        return { pid: recorded as number };
+    }
+    const { pid, host } = (recorded ?? {}) as { pid?: unknown; host?: unknown };
+    if (typeof pid !== 'number' || !Number.isInteger(pid)) {
+        return undefined;
+    }
+    return typeof host === 'string' ? { pid, host } : { pid };
 }
 
 /** A file's text, inode and modification time; `undefined` once it is gone. */
@@ -324,17 +379,22 @@ async function lockHolder(lock: string): Promise<OutputHolder | 'stale' | undefi
     if (typeof recorded.pid !== 'number' || typeof recorded.source !== 'string') {
         return Date.now() - modified < LOCK_WRITE_MS ? undefined : 'stale';
     }
-    return isHolding(recorded.pid, lock)
-        ? { pid: recorded.pid, source: recorded.source }
+    const host = typeof recorded.host === 'string' ? recorded.host : undefined;
+    return isHolding(recorded.pid, lock, host)
+        ? { pid: recorded.pid, source: recorded.source, ...(host && { host }) }
         : 'stale';
 }
 
 /**
- * Whether the run recorded in `file`, as process `pid`, still holds it. This
- * process holds only the files it created; the one that last had its pid may
- * have left others.
+ * Whether the run recorded in `file`, as process `pid` on `host`, still holds
+ * it. This process holds only the files it created; the one that last had its
+ * pid may have left others. A run on another host cannot be checked from here,
+ * so it is taken to hold the file; a file that records no host is judged here.
  */
-function isHolding(pid: number, file: string): boolean {
+function isHolding(pid: number, file: string, host?: string): boolean {
+    if (host !== undefined && host !== HOST) {
+        return true;
+    }
     return pid === process.pid ? held.has(path.resolve(file)) : isRunning(pid);
 }
 

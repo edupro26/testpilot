@@ -4,13 +4,13 @@ import { AzureOpenAI } from 'openai';
 
 import type { Settings } from '../../config.ts';
 import { logger } from '../../logger.ts';
-import { MissingSettingsError } from '../../runtime/exceptions.ts';
+import { MissingSettingsError, PipelineError } from '../../runtime/exceptions.ts';
 import type {
     CompletionRequest,
     ConversationRequest,
     LLMProvider,
 } from '../protocol.ts';
-import { OpenAIChatConversation } from './openai-chat.ts';
+import { cutReason, OpenAIChatConversation } from './openai-chat.ts';
 
 // How long one request may take: a whole script from a reasoning model takes
 // minutes, but an endpoint that never answers should not hold a run for the
@@ -50,8 +50,8 @@ export class AzureOpenAIProvider implements LLMProvider {
             // Left out, it is read from OPENAI_BASE_URL, which the SDK refuses
             // alongside an endpoint.
             baseURL: null,
-            // RetryingLLMProvider retries rate limits; the SDK's own retries
-            // would multiply its attempts.
+            // RetryingLLMProvider retries transient errors; the SDK's own
+            // retries would multiply its attempts.
             maxRetries: 0,
             timeout: REQUEST_TIMEOUT_MS,
         });
@@ -62,7 +62,13 @@ export class AzureOpenAIProvider implements LLMProvider {
         );
     }
 
-    /** Return the model's completion for the given prompt pair. */
+    /**
+     * Return the model's completion for the given prompt pair.
+     *
+     * @throws {PipelineError} With code LLM_RESPONSE_INVALID, if the model
+     *   refused, or the reply was filtered or cut off: what came back is not
+     *   the answer asked for.
+     */
     async complete({
         systemPrompt,
         userPrompt,
@@ -80,7 +86,17 @@ export class AzureOpenAIProvider implements LLMProvider {
             ],
             ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
         });
-        return response.choices[0]?.message.content ?? '';
+        const choice = response.choices[0];
+        const refusal = choice?.message.refusal;
+        const unusable = refusal
+            ? `refused: ${refusal}`
+            : cutReason(choice?.finish_reason);
+        if (unusable !== undefined) {
+            throw new PipelineError(`The LLM's reply cannot be used: ${unusable}`, {
+                code: 'LLM_RESPONSE_INVALID',
+            });
+        }
+        return choice?.message.content ?? '';
     }
 
     /** Open a tool-calling conversation against Azure OpenAI. */

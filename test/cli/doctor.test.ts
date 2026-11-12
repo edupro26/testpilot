@@ -136,7 +136,9 @@ test('missing Azure settings point to config set-azure-openai', async () => {
     expect(check.fix).toContain('--prompt-api-key');
 });
 
-test('an API key in config.json gets the remove-it fix', async () => {
+test('an API key in config.json fails the configuration, with the remove-it fix', async () => {
+    // Not the LLM settings, which init lets pass: it would rewrite the
+    // committed file with the key still in it.
     const root = await emptyDir();
     await mkdir(path.join(root, '.testpilot'));
     await writeFile(
@@ -147,6 +149,7 @@ test('an API key in config.json gets the remove-it fix', async () => {
     const check = checkLlmSettings(AZURE_ENV, root);
 
     expect(check.status).toBe('fail');
+    expect(check.name).toBe('Configuration');
     expect(check.fix).toBe(
         'Remove the API key from .testpilot/config.json; set it with: ' +
             'testpilot config set-azure-openai --prompt-api-key',

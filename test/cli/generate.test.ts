@@ -12,6 +12,7 @@ import {
     utimes,
     writeFile,
 } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -432,6 +433,70 @@ test('Smoke test', async ({ page }) => {
         await unlink(guard);
 
         expect((await run)[0]).toBe(0);
+    });
+
+    test('a takeover that never ends is given up on, naming the guard', async () => {
+        // A run killed mid-takeover leaves its guard; once its pid belongs to a
+        // live process, waiting would never end.
+        const tests = path.join('.testpilot', 'tests');
+        await mkdir(tests, { recursive: true });
+        const { pid } = spawnSync(process.execPath, ['-e', '']);
+        const lock = path.join(tests, 'case.json.lock');
+        const guard = `${lock}.takeover`;
+        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
+        await writeFile(guard, String(process.ppid));
+
+        const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json']);
+
+        expect(exitCode).toBe(2);
+        expect(stderr()).toContain(
+            `OUTPUT_CONFLICT: ${path.join(tests, 'case.json')} is reserved by a run ` +
+                'that has stopped, and another run has been taking it over for',
+        );
+        expect(stderr()).toContain(`delete ${guard}`);
+        expect(existsSync(guard)).toBe(true);
+    }, 10_000);
+
+    test('a reservation made on another host is held, whatever its pid', async () => {
+        // Two containers sharing the volume both run as pid 1: a pid recorded
+        // on another host says nothing about whether that run is going.
+        const tests = path.join('.testpilot', 'tests');
+        await mkdir(tests, { recursive: true });
+        const { pid } = spawnSync(process.execPath, ['-e', '']);
+        const lock = path.join(tests, 'case.json.lock');
+        await writeFile(
+            lock,
+            JSON.stringify({ pid, source: 'other/case.md', host: 'ci-runner-2' }),
+        );
+
+        const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json']);
+
+        expect(exitCode).toBe(2);
+        expect(stderr()).toContain(
+            `is being generated from other/case.md by another run (process ${pid} ` +
+                'on ci-runner-2)',
+        );
+        expect(existsSync(lock)).toBe(true);
+    });
+
+    test('a reservation records the host it was made on', async () => {
+        const lock = path.join('.testpilot', 'tests', 'case.json.lock');
+        let recorded: unknown;
+
+        const [exitCode] = await runPipeline(SMOKE_SCRIPT, [], () => {
+            const extract = fakes.runStep;
+            fakes.runStep = async (...args) => {
+                recorded ??= JSON.parse(await readFile(lock, 'utf8'));
+                return (await extract?.(...args)) ?? [];
+            };
+        });
+
+        expect(exitCode).toBe(0);
+        expect(recorded).toEqual({
+            pid: process.pid,
+            source: 'automation/case.md',
+            host: hostname(),
+        });
     });
 
     test('a reservation recording this process, which it does not hold, is taken over', async () => {

@@ -144,8 +144,8 @@ export function checkPlaywrightConfig(cwd: string): Check {
  * @param env - The environment to read.
  * @param cwd - The project root.
  * @returns A failure naming what is invalid or missing: `Configuration` for an
- *   invalid file or value, `LLM settings` for missing ones or an API key in
- *   the config file.
+ *   invalid file or value, or an API key in the config file; `LLM settings`
+ *   for missing ones.
  */
 export function checkLlmSettings(env: NodeJS.ProcessEnv, cwd: string): Check {
     try {
@@ -163,10 +163,9 @@ export function checkLlmSettings(env: NodeJS.ProcessEnv, cwd: string): Check {
             throw error;
         }
         // Missing LLM settings may be set after `init`; an invalid file or
-        // value may not.
-        const llm = error.source === undefined || error instanceof ApiKeyInConfigError;
+        // value may not, nor an API key in the committed config file.
         return {
-            name: llm ? 'LLM settings' : 'Configuration',
+            name: error.source === undefined ? 'LLM settings' : 'Configuration',
             status: 'fail',
             // Without a source, the error lists the missing variables by name.
             detail:

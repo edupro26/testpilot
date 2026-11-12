@@ -5,6 +5,7 @@ import { beforeEach, expect, type Mock, test, vi } from 'vitest';
 import { loadSettings } from '../../src/config.ts';
 import { AzureOpenAIProvider } from '../../src/llm/provider/azure-openai.ts';
 import { MockProvider } from '../../src/llm/provider/mock.ts';
+import { PipelineError } from '../../src/runtime/exceptions.ts';
 
 const azure = vi.hoisted<{ options: unknown; create: Mock }>(() => ({
     options: undefined,
@@ -166,6 +167,40 @@ test('Azure conversation says why a turn ended without an answer', async () => {
 
     expect((await conversation.send()).text).toBe('Refused: I cannot help with that.');
     expect((await conversation.send()).text).toBe('(stopped by the content filter)');
+});
+
+test.each([
+    [
+        'cut off at the output token limit',
+        { finish_reason: 'length', message: { role: 'assistant', content: 'test(' } },
+        /cut off at the output token limit/,
+    ],
+    [
+        'stopped by the content filter',
+        {
+            finish_reason: 'content_filter',
+            message: { role: 'assistant', content: '' },
+        },
+        /stopped by the content filter/,
+    ],
+    [
+        'refused',
+        { message: { role: 'assistant', content: null, refusal: 'I cannot help.' } },
+        /refused: I cannot help\./,
+    ],
+])('Azure complete fails clearly on a reply %s', async (_name, choice, message) => {
+    // Otherwise a script cut short reads as "does not compile", and a judge
+    // reply cut short as "not valid JSON", and neither says why.
+    const provider = new AzureOpenAIProvider(loadSettings(AZURE_ENV, NO_PROJECT));
+    azure.create.mockResolvedValue({ choices: [choice] });
+
+    const error = await provider
+        .complete({ systemPrompt: 's', userPrompt: 'u' })
+        .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(PipelineError);
+    expect((error as PipelineError).code).toBe('LLM_RESPONSE_INVALID');
+    expect(String(error)).toMatch(message);
 });
 
 test('mock provider returns fixed or computed responses', async () => {

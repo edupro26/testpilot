@@ -107,8 +107,9 @@ export const ERROR_CODES = {
     LLM_RESPONSE_INVALID: {
         exitCode: 1,
         hint:
-            'The LLM answered with something that is not the expected JSON. This is ' +
-            'usually a one-off: try again.',
+            'The LLM answered with something testpilot cannot use: not the expected ' +
+            'JSON, or a reply it refused, or that was filtered or cut off; the ' +
+            'message says which. This is usually a one-off: try again.',
     },
     BROWSER_AGENT_FAILED: {
         exitCode: 1,
@@ -129,12 +130,6 @@ export const ERROR_CODES = {
             'The agent stopped without finishing the step; the message has its last ' +
             'words, which usually say why. Check the step against the page, and ' +
             'reword it if it is ambiguous.',
-    },
-    STEP_REPORT_INVALID: {
-        exitCode: 1,
-        hint:
-            'The agent reported the step wrongly: a malformed report, or a ' +
-            'statement it never ran. This is usually a one-off: try again.',
     },
     STEP_VALIDATION_FAILED: {
         exitCode: 1,
