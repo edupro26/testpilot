@@ -195,6 +195,18 @@ export class StepAgent {
                     continue;
                 }
 
+                if (!this.tools.some((tool) => tool.name === call.name)) {
+                    logger.warning(`The agent called an unknown tool: ${call.name}`);
+                    results.push({
+                        id: call.id,
+                        content:
+                            `There is no tool named ${JSON.stringify(call.name)}. ` +
+                            'Call only the tools you were given, one at a time.',
+                        isError: true,
+                    });
+                    continue;
+                }
+
                 const result = await this.mcp.callTool(call.name, call.arguments);
                 // Only tools whose code stands on its own as a test line contribute.
                 const code = result.code;

@@ -176,6 +176,10 @@ test('an invalid variable is a ConfigurationError naming it', async () => {
     expect(() => loadSettings({ TESTPILOT_LLM_PROVIDER: 'mock' }, root)).toThrow(
         ConfigurationError,
     );
+    // Chromium would only reject it once the browsers launch.
+    expect(() => loadSettings({ TESTPILOT_LOCALE: 'not a locale' }, root)).toThrow(
+        /TESTPILOT_LOCALE/,
+    );
 });
 
 test('the project root is the nearest folder with a package.json', async () => {

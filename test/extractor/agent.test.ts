@@ -84,6 +84,27 @@ test('drives the browser, recovers and collects what MCP ran', async () => {
     expect(tools).not.toContain('browser_run_code_unsafe');
 });
 
+test('a call to a tool it was not given goes back to the agent', async () => {
+    // A made-up or withheld tool is answered with an error the model can act
+    // on, rather than ending the run, and never reaches MCP.
+    const mcp = new SequencedMCP(new McpResult(false, emitted(CLICK)));
+    const llm = new MockProvider('', [
+        toolTurn('browser_close', {}),
+        toolTurn('browser_click', { element: 'link', target: 'e1' }),
+        done(CLICK),
+    ]);
+
+    const { statements } = await new StepAgent(llm, mcp).run('Click Signup / Login', {
+        context: 'fresh',
+    });
+
+    expect(statements.map((s) => s.code)).toEqual([CLICK]);
+    expect(mcp.calls.map(([name]) => name)).toEqual(['browser_click']);
+    const [reply] = llm.conversations[0]!.sent[1]!;
+    expect(reply).toMatchObject({ id: 'call-1', isError: true });
+    expect(reply?.content).toContain('browser_close');
+});
+
 test('a rejected report goes back to the agent, until its repairs run out', async () => {
     // The agent fixes the step on its still-live page, in the same
     // conversation. Past its repairs, the step is handed back rejected, to be

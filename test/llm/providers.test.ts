@@ -106,9 +106,40 @@ test('Azure conversation translates tools and threads tool results', async () =>
             },
         },
     ]);
-    // The history is sent by reference, so later turns show up here too.
     const followUp = azure.create.mock.calls[1]?.[0] as { messages: unknown[] };
-    expect(followUp.messages.slice(2, 4)).toEqual([
+    expect(followUp.messages.slice(2)).toEqual([
+        { role: 'assistant', content: null, tool_calls: [call] },
+        { role: 'tool', tool_call_id: 'call-1', content: 'clicked' },
+    ]);
+});
+
+test('Azure conversation records a turn only once its request succeeds', async () => {
+    // A failed turn is retried with the same results; they must be sent once.
+    const provider = new AzureOpenAIProvider(loadSettings(AZURE_ENV, NO_PROJECT));
+    const conversation = provider.startConversation({
+        systemPrompt: 'sys',
+        userPrompt: 'user',
+        tools: [],
+    });
+    const call = {
+        id: 'call-1',
+        type: 'function',
+        function: { name: 'browser_click', arguments: '{}' },
+    };
+    azure.create
+        .mockResolvedValueOnce(reply({ tool_calls: [call] }))
+        .mockRejectedValueOnce(
+            Object.assign(new Error('rate limited'), { status: 429 }),
+        )
+        .mockResolvedValueOnce(reply({ content: 'done' }));
+    const results = [{ id: 'call-1', content: 'clicked' }];
+
+    await conversation.send();
+    await expect(conversation.send(results)).rejects.toThrow('rate limited');
+    await conversation.send(results);
+
+    const retried = azure.create.mock.calls[2]?.[0] as { messages: unknown[] };
+    expect(retried.messages.slice(2)).toEqual([
         { role: 'assistant', content: null, tool_calls: [call] },
         { role: 'tool', tool_call_id: 'call-1', content: 'clicked' },
     ]);

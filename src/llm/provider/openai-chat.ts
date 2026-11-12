@@ -65,21 +65,25 @@ export class OpenAIChatConversation implements Conversation {
         ];
     }
 
-    /** Append `results`, request the next turn, and record it. */
+    /**
+     * Send `results`, request the next turn, and record both.
+     *
+     * Nothing is recorded until the request succeeds, so a failed turn can be
+     * retried with the same `results`.
+     */
     async send(results: ToolResult[] = []): Promise<ToolUseResponse> {
-        for (const result of results) {
-            this.messages.push({
-                role: 'tool',
-                tool_call_id: result.id,
-                content: result.content,
-            });
-        }
+        const replies: ChatCompletionMessageParam[] = results.map((result) => ({
+            role: 'tool',
+            tool_call_id: result.id,
+            content: result.content,
+        }));
 
         const response = await this.client.chat.completions.create({
             model: this.model,
-            messages: this.messages,
+            messages: [...this.messages, ...replies],
             tools: this.tools,
         });
+        this.messages.push(...replies);
         const message = response.choices[0]?.message;
         if (message === undefined) {
             return { text: null, toolCalls: [] };

@@ -158,10 +158,15 @@ export class ValidationBrowser implements ReplayBrowser, AsyncDisposable {
         timeoutMs = REPLAY_TIMEOUT_MS,
     }: LaunchOptions = {}): Promise<ValidationBrowser> {
         const browser = await launchChromium(headless);
-        const context = await browser.newContext({ locale });
-        const page = await context.newPage();
-        logger.debug(`Validation browser launched (locale=${locale})`);
-        return new ValidationBrowser(browser, locale, timeoutMs, context, page);
+        try {
+            const context = await browser.newContext({ locale });
+            const page = await context.newPage();
+            logger.debug(`Validation browser launched (locale=${locale})`);
+            return new ValidationBrowser(browser, locale, timeoutMs, context, page);
+        } catch (error) {
+            await browser.close();
+            throw error;
+        }
     }
 
     /**

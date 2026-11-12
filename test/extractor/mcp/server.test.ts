@@ -59,6 +59,8 @@ test('the tool allowlists', () => {
     // them -- their code just never becomes a statement.
     expect(ALLOWED_TOOLS).not.toContain('browser_run_code_unsafe');
     expect(ALLOWED_TOOLS).not.toContain('browser_close');
+    // Its aria snapshot spans several lines, which no statement may.
+    expect(ALLOWED_TOOLS).not.toContain('browser_verify_list_visible');
     for (const name of COLLECTABLE_TOOLS) {
         expect(ALLOWED_TOOLS).toContain(name);
     }
@@ -88,7 +90,6 @@ test('the tool allowlists', () => {
         'browser_verify_element_visible',
         'browser_verify_text_visible',
         'browser_verify_value',
-        'browser_verify_list_visible',
     ]) {
         expect(COLLECTABLE_TOOLS.has(name)).toBe(true);
     }

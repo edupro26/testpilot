@@ -36,6 +36,15 @@ const LogLevelSchema = z
     .transform((value) => value.toUpperCase())
     .pipe(z.enum(LOG_LEVELS));
 
+/** Whether `value` is a BCP 47 language tag, as the browser's locale must be. */
+function isLocale(value: string): boolean {
+    try {
+        return Intl.getCanonicalLocales(value).length === 1;
+    } catch {
+        return false;
+    }
+}
+
 const ConfigFileSchema = z.strictObject({
     llmProvider: z.enum(LLM_PROVIDER_NAMES).optional(),
     azureOpenAI: z
@@ -69,7 +78,10 @@ const SettingsSchema = z.object({
 
     // Shared by the MCP browser, the validation browser and the generated script,
     // since sites localise by Accept-Language.
-    TESTPILOT_LOCALE: z.string().min(1).default('en-US'),
+    TESTPILOT_LOCALE: z
+        .string()
+        .refine(isLocale, 'must be a language tag, such as en-US or pt-PT')
+        .default('en-US'),
 
     TESTPILOT_MAX_TURNS: z.coerce.number().int().positive().default(25),
 

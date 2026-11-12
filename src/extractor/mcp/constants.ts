@@ -8,7 +8,9 @@ export const CALL_TIMEOUT_MS = 180_000;
 export const CODE_BLOCK = /### Ran Playwright code\n```js\n([\s\S]*?)\n```/;
 
 // Every tool the agent may call. Withheld: browser_run_code_unsafe (RCE in the
-// server process) and browser_close (kills the session the pipeline owns).
+// server process), browser_close (kills the session the pipeline owns) and
+// browser_verify_list_visible (its aria snapshot spans several lines, and a
+// statement must fit on one).
 export const ALLOWED_TOOLS: readonly string[] = [
     'browser_navigate',
     'browser_navigate_back',
@@ -36,7 +38,6 @@ export const ALLOWED_TOOLS: readonly string[] = [
     'browser_generate_locator',
     'browser_verify_element_visible',
     'browser_verify_text_visible',
-    'browser_verify_list_visible',
     'browser_verify_value',
 ];
 
@@ -58,6 +59,5 @@ export const COLLECTABLE_TOOLS: ReadonlySet<string> = new Set([
     'browser_select_option',
     'browser_verify_element_visible',
     'browser_verify_text_visible',
-    'browser_verify_list_visible',
     'browser_verify_value',
 ]);

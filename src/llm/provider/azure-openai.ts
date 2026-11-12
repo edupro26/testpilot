@@ -37,7 +37,15 @@ export class AzureOpenAIProvider implements LLMProvider {
             TESTPILOT_AZURE_MODEL_NAME: settings.azureModelName,
             TESTPILOT_OPENAI_API_VERSION: settings.openaiApiVersion,
         });
-        this.client = new AzureOpenAI({ endpoint, deployment, apiKey, apiVersion });
+        this.client = new AzureOpenAI({
+            endpoint,
+            deployment,
+            apiKey,
+            apiVersion,
+            // Left out, it is read from OPENAI_BASE_URL, which the SDK refuses
+            // alongside an endpoint.
+            baseURL: null,
+        });
         this.model = model;
         logger.debug(
             `Azure OpenAI client configured (endpoint=${endpoint}, model=${model}, ` +

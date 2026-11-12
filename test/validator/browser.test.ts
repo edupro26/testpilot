@@ -107,3 +107,21 @@ test('a Chromium that cannot launch is a BrowserLaunchError with a cause', async
         launch.mockRestore();
     }
 });
+
+test('a browser that cannot open its page is closed again', async () => {
+    // Left running, it would keep the process from ever exiting.
+    const launch = vi.spyOn(chromium, 'launch');
+    try {
+        const error = await ValidationBrowser.launch({ locale: 'not a locale' }).catch(
+            (e: unknown) => e,
+        );
+
+        expect(error).toBeInstanceOf(Error);
+        const launched = await (launch.mock.results[0]?.value as ReturnType<
+            typeof chromium.launch
+        >);
+        expect(launched.isConnected()).toBe(false);
+    } finally {
+        launch.mockRestore();
+    }
+});

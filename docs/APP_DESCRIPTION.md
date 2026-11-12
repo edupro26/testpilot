@@ -283,7 +283,7 @@ The server's configuration is built in code (`mcpConfig()` in `src/extractor/mcp
 - **A wrong assertion is slow to fail.** The replay lets every assertion wait up to 30 seconds, so an assertion on something that never appears takes that long to fail validation.
 - **Timeouts reflect the run that generated the script.** An assertion's timeout and the test timeout allow twice what was measured in one replay; a site that is slower than that on another day still times out. A pinned `test.setTimeout` also overrides a higher timeout set in the user's own Playwright config.
 - **Five retries per run, none for Extractor failures.** Every re-extraction spends one, whether a replay failed, the semantic validation still rejected a step after the agent's repairs, or a restore broke at an earlier step; an Extractor failure (running out of turns, reporting code MCP never ran) aborts the run immediately.
-- **Single-line statements.** Collected code is split line by line, so a statement spanning several lines would be rejected.
+- **Single-line statements.** Collected code is split line by line, so a tool whose code spans several lines (`browser_verify_list_visible`'s aria snapshot) is withheld from the agent.
 - **One locale per run.** The Playwright MCP locale is fixed when its session starts, so a run covers one locale.
 - **Cost and latency.** Each step is its own agent conversation of several tool calls, plus a Validator call.
 - **Non-determinism.** Replay proves each statement works; it does not guarantee the same locator is chosen on every run.

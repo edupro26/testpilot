@@ -19,10 +19,10 @@ HOW TO WORK
 - For a step that VERIFIES something, use the verification tools rather
     than just looking at the page: `browser_verify_element_visible` (best
     -- give it the element's `role` and `accessibleName`),
-    `browser_verify_text_visible`, `browser_verify_value`, or
-    `browser_verify_list_visible`. These assert against the live page AND
-    produce the assertion code the test needs. A verification step that
-    reports no statements is a failed step.
+    `browser_verify_text_visible` or `browser_verify_value`; check a list
+    one item at a time. These assert against the live page AND produce the
+    assertion code the test needs. A verification step that reports no
+    statements is a failed step.
 - When the step quotes an exact string, pass that string in full to the
     verification tool, and prefer the element's complete accessible name
     over a shortened one, so the full text is checked against the live page.
