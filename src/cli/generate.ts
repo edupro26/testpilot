@@ -88,8 +88,12 @@ const TAKEOVER_POLL_MS = 50;
 
 // How long a run waits for another run's takeover, which takes milliseconds,
 // before it gives up: the guard may be one left by a run killed mid-takeover,
-// whose pid a live process now has.
-const TAKEOVER_WAIT_MS = 3_000;
+// whose pid a live process now has. Longer than `LOCK_WRITE_MS`, so that a
+// guard its run left unwritten is cleared, not given up on.
+const TAKEOVER_WAIT_MS = LOCK_WRITE_MS + 1_000;
+
+// The codes `link` fails with where the file system has no hard links.
+const NO_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS']);
 
 // The host this process runs on. A pid means nothing outside its host: two
 // containers sharing a volume both run as pid 1.
@@ -139,7 +143,7 @@ async function reserveOutputs(
     const deadline = Date.now() + TAKEOVER_WAIT_MS;
     for (;;) {
         try {
-            await writeFile(lock, JSON.stringify(holder), { flag: 'wx' });
+            await createWritten(lock, JSON.stringify(holder));
             held.add(path.resolve(lock));
             return {
                 [Symbol.asyncDispose]: () =>
@@ -205,7 +209,9 @@ async function reserveOutputs(
  * second removing the first's new lock, and both would go on to write the
  * outputs. A run that finds the guard taken waits, then looks at the lock
  * again; a guard whose run has stopped while taking over is cleared (see
- * `clearStaleGuard`).
+ * `clearStaleGuard`). The guard is created already written, so it is never
+ * judged by its age while its run is going, and it records an id of its own, so
+ * that a run removes only its own guard.
  *
  * @param lock - The lock file, found stale.
  * @returns False if another run's guard kept this one from looking at the lock
@@ -215,10 +221,9 @@ async function reserveOutputs(
  */
 async function takeOver(lock: string): Promise<boolean> {
     const guard = `${lock}.takeover`;
+    const run = { pid: process.pid, host: HOST, id: randomUUID() };
     try {
-        await writeFile(guard, JSON.stringify({ pid: process.pid, host: HOST }), {
-            flag: 'wx',
-        });
+        await createWritten(guard, JSON.stringify(run));
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
             throw error;
@@ -236,18 +241,51 @@ async function takeOver(lock: string): Promise<boolean> {
         }
     } finally {
         held.delete(path.resolve(guard));
-        await removeLock(guard);
+        const mine = await fileState(guard);
+        if (mine?.text === JSON.stringify(run)) {
+            await removeIfSame(guard, mine);
+        }
     }
     return true;
+}
+
+/**
+ * Create `file` holding `text`, unless it exists, so that no other run finds it
+ * unwritten: the text goes to a draft of this run's own, which is then linked
+ * into place. Where the file system has no hard links, or the draft cannot be
+ * written, it is written in place.
+ *
+ * @throws {NodeJS.ErrnoException} With code `EEXIST` if `file` exists, or what
+ *   kept it from being created.
+ */
+async function createWritten(file: string, text: string): Promise<void> {
+    const draft = `${file}.${randomUUID()}`;
+    try {
+        await writeFile(draft, text, { flag: 'wx' });
+    } catch {
+        // Writing in place says whether `file` exists, which a folder this run
+        // cannot write to does not stop.
+        await writeFile(file, text, { flag: 'wx' });
+        return;
+    }
+    try {
+        await link(draft, file);
+    } catch (error) {
+        if (!NO_LINKS.has((error as NodeJS.ErrnoException).code ?? '')) {
+            throw error;
+        }
+        await writeFile(file, text, { flag: 'wx' });
+    } finally {
+        await removeLock(draft);
+    }
 }
 
 /**
  * Remove a takeover guard whose run has stopped.
  *
  * The guard is judged by the run it records, not by its age, which a file
- * server's clock can skew. It is moved aside before it is removed, and put back
- * if it turns out to be one another run created meanwhile: removing it by name
- * would remove that run's guard.
+ * server's clock can skew; only one that records no run, as one left unwritten
+ * does, is judged by its age. It is removed with `removeIfSame`.
  *
  * @param guard - The guard file, found taken.
  * @returns Whether it was stale and is now gone.
@@ -267,12 +305,25 @@ async function clearStaleGuard(guard: string): Promise<boolean> {
     if (!stale) {
         return false;
     }
-    const aside = `${guard}.${randomUUID()}`;
+    await removeIfSame(guard, judged);
+    return true;
+}
+
+/**
+ * Remove `file` if it is still the one `judged` describes. It is moved aside
+ * before it is removed, and put back if it turns out to be one another run
+ * created meanwhile: removing it by name would remove that run's.
+ *
+ * @throws {NodeJS.ErrnoException} What kept the file from being moved or
+ *   removed.
+ */
+async function removeIfSame(file: string, judged: FileState): Promise<void> {
+    const aside = `${file}.${randomUUID()}`;
     try {
-        await rename(guard, aside);
+        await rename(file, aside);
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            return true;
+            return;
         }
         throw error;
     }
@@ -283,16 +334,14 @@ async function clearStaleGuard(guard: string): Promise<boolean> {
             moved.mtimeMs !== judged.mtimeMs ||
             moved.text !== judged.text)
     ) {
-        // Another run's new guard: put it back, unless a third run has
-        // created one since.
-        await link(aside, guard).catch(() => undefined);
+        // Another run's: put it back, unless a third run has created one since.
+        await link(aside, file).catch(() => undefined);
     }
     await removeLock(aside);
-    return true;
 }
 
 /**
- * The run a takeover guard records: `{ pid, host }`, or a bare pid as guards
+ * The run a takeover guard records: `{ pid, host, id }`, or a bare pid as guards
  * written before hosts were recorded hold; `undefined` if it is not written yet.
  */
 function guardRun(text: string): { pid: number; host?: string } | undefined {
@@ -312,10 +361,15 @@ function guardRun(text: string): { pid: number; host?: string } | undefined {
     return typeof host === 'string' ? { pid, host } : { pid };
 }
 
-/** A file's text, inode and modification time; `undefined` once it is gone. */
-async function fileState(
-    file: string,
-): Promise<{ text: string; ino: number; mtimeMs: number } | undefined> {
+/** A file's text, inode and modification time. */
+interface FileState {
+    text: string;
+    ino: number;
+    mtimeMs: number;
+}
+
+/** A file's state; `undefined` once it is gone. */
+async function fileState(file: string): Promise<FileState | undefined> {
     try {
         const [text, { ino, mtimeMs }] = await Promise.all([
             readFile(file, 'utf8'),

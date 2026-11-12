@@ -415,6 +415,37 @@ test('Smoke test', async ({ page }) => {
         expect(existsSync(guard)).toBe(false);
     });
 
+    test('a takeover left unwritten is waited for until it is stale, then cleared', async () => {
+        // A run killed between creating its guard and writing it leaves an empty
+        // one, which is cleared by age; the run must not give up before then.
+        const tests = path.join('.testpilot', 'tests');
+        await mkdir(tests, { recursive: true });
+        const { pid } = spawnSync(process.execPath, ['-e', '']);
+        const lock = path.join(tests, 'case.json.lock');
+        const guard = `${lock}.takeover`;
+        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
+        await writeFile(guard, '');
+
+        expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
+        expect(existsSync(guard)).toBe(false);
+        expect(existsSync(lock)).toBe(false);
+    }, 10_000);
+
+    test('a takeover leaves no files of its own behind', async () => {
+        // The guard and the new lock are written as drafts, then linked into
+        // place, so that no run finds them empty.
+        const tests = path.join('.testpilot', 'tests');
+        await mkdir(tests, { recursive: true });
+        const { pid } = spawnSync(process.execPath, ['-e', '']);
+        await writeFile(
+            path.join(tests, 'case.json.lock'),
+            JSON.stringify({ pid, source: 'automation/case.md' }),
+        );
+
+        expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
+        expect(await readdir(tests)).toEqual(['case.json']);
+    });
+
     test('a takeover by a run still going is waited for, however old', async () => {
         // A file server's clock can make a guard just created look old.
         const tests = path.join('.testpilot', 'tests');

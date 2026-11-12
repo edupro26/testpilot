@@ -47,11 +47,13 @@ export interface TestDirs {
  * Read the test folders from a Playwright config's text.
  *
  * The config is the object exported by default or as `module.exports`, either
- * directly, through `defineConfig` (its first argument) or through a variable
- * declared in the file. Comments are ignored.
+ * directly, through `defineConfig` (its only argument), under whatever name the
+ * file imports it as, or through a variable declared in the file. Comments are
+ * ignored.
  *
  * @param configText - The config file's source.
- * @returns The folders; none set if the config object cannot be found.
+ * @returns The folders; a `testDir` of `null` if the config object cannot be
+ *   found, as nothing can then be said of where its specs are.
  */
 export function readTestDirs(configText: string): TestDirs {
     const source = ts.createSourceFile(
@@ -62,7 +64,7 @@ export function readTestDirs(configText: string): TestDirs {
     );
     const config = configObject(source);
     if (config === undefined) {
-        return { testDir: undefined, projects: [] };
+        return { testDir: null, projects: [] };
     }
     const projects = propertyValue(config, 'projects');
     return {
@@ -99,8 +101,10 @@ function configObject(source: ts.SourceFile): ts.ObjectLiteralExpression | undef
 }
 
 /**
- * The object literal an expression stands for: itself, the first argument of
+ * The object literal an expression stands for: itself, the only argument of
  * `defineConfig`, or the value of a variable declared at the top of `source`.
+ * `defineConfig` given several configs merges them, so none of them alone is
+ * the config.
  */
 function objectOf(
     expression: ts.Expression,
@@ -118,10 +122,12 @@ function objectOf(
     }
     if (
         ts.isCallExpression(expression) &&
-        expression.expression.getText() === 'defineConfig'
+        isDefineConfig(expression.expression, source)
     ) {
-        const [first] = expression.arguments;
-        return first === undefined ? undefined : objectOf(first, source);
+        const [only, ...others] = expression.arguments;
+        return only === undefined || others.length > 0
+            ? undefined
+            : objectOf(only, source);
     }
     if (ts.isIdentifier(expression)) {
         const declaration = source.statements
@@ -133,6 +139,56 @@ function objectOf(
             : objectOf(declaration.initializer, source);
     }
     return undefined;
+}
+
+/**
+ * Whether `callee` is Playwright's `defineConfig`: by that name, as a property
+ * (`test.defineConfig`), or by the name the file imports or requires it as
+ * (`import { defineConfig as config }`, `const { defineConfig: config } =
+ * require(...)`).
+ */
+function isDefineConfig(callee: ts.Expression, source: ts.SourceFile): boolean {
+    if (ts.isPropertyAccessExpression(callee)) {
+        return callee.name.text === 'defineConfig';
+    }
+    if (!ts.isIdentifier(callee)) {
+        return false;
+    }
+    if (callee.text === 'defineConfig') {
+        return true;
+    }
+    for (const statement of source.statements) {
+        const bindings = ts.isImportDeclaration(statement)
+            ? statement.importClause?.namedBindings
+            : undefined;
+        if (
+            bindings !== undefined &&
+            ts.isNamedImports(bindings) &&
+            bindings.elements.some(
+                (element) =>
+                    element.name.text === callee.text &&
+                    element.propertyName?.getText() === 'defineConfig',
+            )
+        ) {
+            return true;
+        }
+        if (
+            ts.isVariableStatement(statement) &&
+            statement.declarationList.declarations.some(
+                (declaration) =>
+                    ts.isObjectBindingPattern(declaration.name) &&
+                    declaration.name.elements.some(
+                        (element) =>
+                            ts.isIdentifier(element.name) &&
+                            element.name.text === callee.text &&
+                            element.propertyName?.getText() === 'defineConfig',
+                    ),
+            )
+        ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -273,9 +329,10 @@ function printAfterChecks(lines: string[]): void {
  */
 async function scriptsDirFor(cwd: string): Promise<string> {
     const configFile = findPlaywrightConfig(cwd);
-    const dirs = readTestDirs(
-        configFile === undefined ? '' : await readFile(configFile, 'utf8'),
-    );
+    const dirs: TestDirs =
+        configFile === undefined
+            ? { testDir: undefined, projects: [] }
+            : readTestDirs(await readFile(configFile, 'utf8'));
     // Playwright's default testDir is the config's own folder.
     const fallback = path.posix.join(toPosix(dirs.testDir ?? '.'), 'testpilot');
     const inherited = dirs.testDir === undefined ? '.' : dirs.testDir;

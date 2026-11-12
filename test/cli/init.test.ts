@@ -88,8 +88,24 @@ test('readTestDirs finds the config however it is exported', () => {
         "export default { testDir: 'e2e' } satisfies PlaywrightTestConfig;",
         "const config = { testDir: 'e2e' };\nexport default config;",
         "module.exports = defineConfig({ testDir: 'e2e' });",
+        "import { defineConfig as config } from '@playwright/test';\n" +
+            "export default config({ testDir: 'e2e' });",
+        "import * as pw from '@playwright/test';\n" +
+            "export default pw.defineConfig({ testDir: 'e2e' });",
+        "const { defineConfig: config } = require('@playwright/test');\n" +
+            "module.exports = config({ testDir: 'e2e' });",
     ]) {
         expect(readTestDirs(configText).testDir).toBe('e2e');
+    }
+});
+
+test('readTestDirs says it cannot read a config it cannot find', () => {
+    for (const configText of [
+        "export default makeConfig({ testDir: 'e2e' });",
+        "export default defineConfig(base, { testDir: 'e2e' });",
+        "export default require('./shared.config');",
+    ]) {
+        expect(readTestDirs(configText)).toEqual({ testDir: null, projects: [] });
     }
 });
 
@@ -220,9 +236,35 @@ test('without a literal testDir the scripts go to testpilot/', async () => {
     expect(JSON.parse(await readConfig(joined))).toEqual({ scriptsDir: 'testpilot' });
     expect(printed()).toContain('! Could not read testDir from playwright.config.ts');
 
+    stdout.mockClear();
     const unset = await project('export default {};');
     await initCommand({ cwd: unset, checks: checks() });
     expect(JSON.parse(await readConfig(unset))).toEqual({ scriptsDir: 'testpilot' });
+    expect(printed()).not.toContain('Could not read testDir');
+});
+
+test('an aliased defineConfig is followed to its testDir', async () => {
+    const cwd = await project(
+        "import { defineConfig as config } from '@playwright/test';\n" +
+            "export default config({ testDir: './e2e' });",
+    );
+
+    await initCommand({ cwd, checks: checks() });
+
+    expect(JSON.parse(await readConfig(cwd))).toEqual({ scriptsDir: 'e2e/testpilot' });
+    expect(printed()).not.toContain('Could not read testDir');
+});
+
+test('a config whose object cannot be found is warned about, not taken as unset', async () => {
+    const cwd = await project(
+        "import { makeConfig } from './shared';\n" +
+            "export default makeConfig({ testDir: './e2e' });",
+    );
+
+    await initCommand({ cwd, checks: checks() });
+
+    expect(JSON.parse(await readConfig(cwd))).toEqual({ scriptsDir: 'testpilot' });
+    expect(printed()).toContain('! Could not read testDir from playwright.config.ts');
 });
 
 test("a project's testDir is not taken for the whole config's", async () => {
