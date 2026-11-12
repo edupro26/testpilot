@@ -174,8 +174,30 @@ test('a reported wait is left out of the script', async () => {
     expect(repair.content).toContain('browser_verify_');
 });
 
+test('a report without its statements goes back to the agent', async () => {
+    // Truncated tool-call JSON reaches the loop as `{}`; read as no
+    // statements, it would drop the step's code without a word.
+    const mcp = new SequencedMCP(new McpResult(false, emitted(CLICK)));
+    const llm = new MockProvider('', [
+        toolTurn('browser_click', { element: 'link', target: 'e1' }),
+        toolTurn('step_done', {}),
+        done(CLICK),
+    ]);
+
+    const { statements } = await new StepAgent(llm, mcp).run('Click Signup / Login', {
+        context: 'fresh',
+    });
+
+    expect(statements.map((s) => s.code)).toEqual([CLICK]);
+    const [repair] = llm.conversations[0]!.sent[2]!;
+    expect(repair).toMatchObject({ isError: true });
+    expect(repair?.content).toContain('statements');
+});
+
 describe('rejects a statement not emitted verbatim by a collectable tool', () => {
-    // The verbatim rule is enforced in code, not merely prompted.
+    // The verbatim rule is enforced in code, not merely prompted. A report
+    // breaking it goes back to the agent, and ends the run once its repairs
+    // run out; a statement that does not parse is our bug, and ends it at once.
     test.each([
         {
             id: 'never-ran',
@@ -221,13 +243,22 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
         },
     ])('$id', async ({ tool, ran, reported, match, code }) => {
         const mcp = new FakeMCP({ [tool]: new McpResult(false, emitted(ran)) });
-        const llm = new MockProvider('', [toolTurn(tool, {}), done(reported)]);
+        const llm = new MockProvider('', [
+            toolTurn(tool, {}),
+            done(reported),
+            done(reported),
+            done(reported),
+        ]);
 
         const error = await new StepAgent(llm, mcp)
             .run('Do the step', { context: 'fresh' })
             .catch((e: unknown) => e);
         expect(String(error)).toMatch(new RegExp(match));
         expect((error as ExtractorError).code).toBe(code);
+        const repairs = llm.conversations[0]!.sent.filter((sent) =>
+            sent.some((result) => result.content.includes('rejected')),
+        );
+        expect(repairs).toHaveLength(code === 'STEP_REPORT_INVALID' ? 2 : 0);
     });
 });
 

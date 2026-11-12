@@ -207,7 +207,7 @@ test("judges whether the code tests the right thing, on the agent's page", async
     expect(result.statements).toEqual([]);
 });
 
-test('no statements are trivially valid', async () => {
+test('no statements replay trivially', async () => {
     // Some steps genuinely need no browser interaction.
     const browser = new FakeBrowser();
     const validator = new Validator(new MockProvider('never called'), browser);
@@ -217,8 +217,22 @@ test('no statements are trivially valid', async () => {
     );
 
     expect(result).toMatchObject({ ok: true, runTimeMs: 0 });
-    expect((await validator.judge(STEP, [], PAGE)).isValid).toBe(true);
     expect(browser.calls).toEqual([]);
+});
+
+test('a step with no statements is still judged', async () => {
+    // Only the judge can tell a step that needs nothing from a verification
+    // whose check went missing.
+    let prompt = '';
+    const judge = new MockProvider((_system, user) => {
+        prompt = user;
+        return verdict(false, 'the step asks to verify a message; nothing checks it');
+    });
+
+    const result = await new Validator(judge, new FakeBrowser()).judge(STEP, [], PAGE);
+
+    expect(result.isValid).toBe(false);
+    expect(prompt).toContain('(no statements)');
 });
 
 test('errors on an unusable verdict', async () => {

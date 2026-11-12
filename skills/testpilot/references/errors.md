@@ -322,7 +322,8 @@ suggest wording, but do not change the test case until they agree.
 **Exit:** 1
 
 **Cause:** the browser agent reported a finished step wrongly: the report was
-malformed, or it named a statement it never ran.
+malformed, or it named a statement it never ran, and it still did after being
+asked to fix it.
 
 **Hint:** The agent reported the step wrongly: a malformed report, or a statement it never ran. This is usually a one-off: try again.
 

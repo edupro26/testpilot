@@ -208,6 +208,19 @@ describe('PlaywrightMCP', () => {
         expect(snapshot.isError).toBe(false);
         expect(snapshot.content).toContain('Restored by the pipeline');
     });
+
+    test("the agent's page is the tab Playwright MCP has selected", async () => {
+        // A popup opens a newer page, but the agent stays on its tab until it
+        // selects another; the judge must see the page the agent sees.
+        await using mcp = await PlaywrightMCP.connect(playwrightServer('en-US'));
+        await mcp.run([statement("await page.goto('data:text/html,<h1>Agent</h1>');")]);
+        const agentPage = await mcp.page();
+
+        await agentPage.context().newPage();
+
+        expect(agentPage.context().pages()).toHaveLength(2);
+        expect(await mcp.page()).toBe(agentPage);
+    });
 });
 
 /** A stand-in browser context, recording where its pages navigated. */

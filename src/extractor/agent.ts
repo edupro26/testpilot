@@ -75,7 +75,7 @@ const STEP_DONE_TOOL: ToolDefinition = {
 
 /** The `step_done` payload. */
 const StepDoneSchema = z.object({
-    statements: z.array(z.object({ code: z.string() })).default([]),
+    statements: z.array(z.object({ code: z.string() })),
 });
 
 /** Judges a step's reported statements against what the step asks. */
@@ -169,10 +169,15 @@ export class StepAgent {
             results = [];
             for (const call of response.toolCalls) {
                 if (call.name === STEP_DONE) {
-                    const checked = await review(
-                        collect(call.arguments, emitted, waits, step),
-                        check,
-                    );
+                    const collected = collect(call.arguments, emitted, waits, step);
+                    if (collected.invalid !== undefined && repairs === MAX_REPAIRS) {
+                        throw new ExtractorError(
+                            `Step ${JSON.stringify(step)} was still reported wrongly ` +
+                                `after ${repairs} repair(s): ${collected.invalid}`,
+                            { code: 'STEP_REPORT_INVALID' },
+                        );
+                    }
+                    const checked = await review(collected, check);
                     if (checked.rejection === undefined) {
                         logger.info(`Step complete after ${turn + 1} turn(s)`);
                         return checked;
@@ -239,9 +244,12 @@ export class StepAgent {
  * a verification step would otherwise pass as needing no interaction.
  */
 async function review(
-    { statements, droppedWaits }: ReturnType<typeof collect>,
+    { statements, droppedWaits, invalid }: ReturnType<typeof collect>,
     check?: StepCheck,
 ): Promise<StepResult> {
+    if (invalid !== undefined) {
+        return { statements, rejection: invalid };
+    }
     if (statements.length === 0 && droppedWaits > 0) {
         return { statements, rejection: ONLY_WAITS };
     }
@@ -264,23 +272,28 @@ function repairRequest(rejection: string): string {
  * @param emitted - Every statement a collectable tool reported running.
  * @param waits - Every wait `browser_wait_for` ran; one reported is left out.
  * @param step - The step's text, for error messages.
- * @returns The accepted statements, and how many reported waits were left out.
- * @throws {ExtractorError} If the payload is malformed, or names a statement
- *   MCP never ran.
+ * @returns The accepted statements, and how many reported waits were left out;
+ *   for a malformed payload or a statement MCP never ran, why the report is
+ *   invalid, for the model to fix.
+ * @throws {ExtractorError} If a collected statement does not parse on its own.
  */
 function collect(
     args: Record<string, unknown>,
     emitted: string[],
     waits: Set<string>,
     step: string,
-): { statements: StepStatement[]; droppedWaits: number } {
+): { statements: StepStatement[]; droppedWaits: number; invalid?: string } {
+    // Arguments that were not valid JSON, e.g. cut short, arrive as `{}`.
     const parsed = StepDoneSchema.safeParse(args);
     if (!parsed.success) {
-        throw new ExtractorError(
-            `${STEP_DONE} payload for step ${JSON.stringify(step)} was malformed: ` +
+        logger.warning(`${STEP_DONE} payload was malformed`);
+        return {
+            statements: [],
+            droppedWaits: 0,
+            invalid:
+                `the ${STEP_DONE} arguments were malformed or cut short:\n` +
                 z.prettifyError(parsed.error),
-            { code: 'STEP_REPORT_INVALID' },
-        );
+        };
     }
 
     const allowed = new Set(emitted.map((line) => line.trim()));
@@ -294,14 +307,18 @@ function collect(
             continue;
         }
         if (!allowed.has(code)) {
-            throw new ExtractorError(
-                `Step ${JSON.stringify(step)} reported a statement that no collectable ` +
-                    `Playwright MCP tool emitted, so it was never run or cannot ` +
-                    `be written into the script:\n` +
+            logger.warning(`Reported a statement no collectable tool emitted: ${code}`);
+            return {
+                statements: [],
+                droppedWaits: 0,
+                invalid:
+                    'it reported a statement that no collectable Playwright MCP ' +
+                    'tool emitted, so it was never run or cannot be written into ' +
+                    'the script. Copy statements verbatim from a successful ' +
+                    "tool call's 'Ran Playwright code' block.\n" +
                     `  claimed:  ${code}\n` +
                     `  emitted:  ${[...allowed].sort().join(', ') || '(nothing)'}`,
-                { code: 'STEP_REPORT_INVALID' },
-            );
+            };
         }
         requireStatement(code, step);
         statements.push(statement(code));

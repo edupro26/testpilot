@@ -283,7 +283,8 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
     }
 
     /**
-     * The agent's page: the session's newest, opened if it has none.
+     * The agent's page: the tab Playwright MCP has selected, opened if there
+     * is none. A popup is a newer page, but not the agent's until it selects it.
      *
      * @throws {McpError} If the session's server exposes no browser context.
      */
@@ -295,7 +296,18 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
                 { code: 'BROWSER_AGENT_FAILED' },
             );
         }
-        return context.pages().at(-1) ?? (await context.newPage());
+        const pages = context.pages();
+        if (pages.length > 1) {
+            // MCP lists its tabs in the context's page order, marking the
+            // selected one "- 1: (current) [title](url)".
+            const tabs = await this.callTool('browser_tabs', { action: 'list' });
+            const current = /^- (\d+): \(current\)/m.exec(tabs.content)?.[1];
+            const selected = pages[Number(current)];
+            if (selected !== undefined) {
+                return selected;
+            }
+        }
+        return pages.at(-1) ?? (await context.newPage());
     }
 
     /**

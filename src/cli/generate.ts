@@ -76,6 +76,11 @@ const LOCK_WRITE_MS = 5_000;
 // taking over.
 const TAKEOVER_POLL_MS = 50;
 
+// The lock files this process holds, resolved. One that records this process
+// but is not held here was left by an earlier process given the same pid, as
+// each container's first process is.
+const held = new Set<string>();
+
 /** Who holds a reservation of a test case's outputs, as its lock file records it. */
 interface OutputHolder {
     /** The holding run's process. */
@@ -111,14 +116,17 @@ async function reserveOutputs(
     for (;;) {
         try {
             await writeFile(lock, JSON.stringify(holder), { flag: 'wx' });
+            held.add(path.resolve(lock));
             return {
                 [Symbol.asyncDispose]: () =>
-                    removeLock(lock).catch((error: unknown) => {
-                        logger.warning(
-                            `Cannot remove ${shown(lock)}; the next run will take it ` +
-                                `over: ${errorMessage(error)}`,
-                        );
-                    }),
+                    removeLock(lock)
+                        .catch((error: unknown) => {
+                            logger.warning(
+                                `Cannot remove ${shown(lock)}; the next run will take ` +
+                                    `it over: ${errorMessage(error)}`,
+                            );
+                        })
+                        .finally(() => held.delete(path.resolve(lock))),
             };
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
@@ -240,9 +248,18 @@ async function lockHolder(lock: string): Promise<OutputHolder | 'stale' | undefi
     if (typeof recorded.pid !== 'number' || typeof recorded.source !== 'string') {
         return Date.now() - modified < LOCK_WRITE_MS ? undefined : 'stale';
     }
-    return isRunning(recorded.pid)
+    return isHolding(recorded.pid, lock)
         ? { pid: recorded.pid, source: recorded.source }
         : 'stale';
+}
+
+/**
+ * Whether the run recorded in `file`, as process `pid`, still holds it. This
+ * process holds only the files it created; the one that last had its pid may
+ * have left others.
+ */
+function isHolding(pid: number, file: string): boolean {
+    return pid === process.pid ? held.has(path.resolve(file)) : isRunning(pid);
 }
 
 /** Whether the process `pid` exists. */

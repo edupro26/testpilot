@@ -380,10 +380,11 @@ test('Smoke test', async ({ page }) => {
         const second = runPipeline(SMOKE_SCRIPT, ['--json']);
         await sleep(200);
         // It wins: its lock replaces the stale one, then it lets go of the guard.
+        // Another process: a lock recording this one, it does not hold.
         const won = path.join(tests, 'won.lock');
         await writeFile(
             won,
-            JSON.stringify({ pid: process.pid, source: 'other/case.md' }),
+            JSON.stringify({ pid: process.ppid, source: 'other/case.md' }),
         );
         await rename(won, lock);
         await unlink(guard);
@@ -391,7 +392,7 @@ test('Smoke test', async ({ page }) => {
         expect((await second)[0]).toBe(2);
         expect(stderr()).toContain(
             'is being generated from other/case.md by another run ' +
-                `(process ${process.pid})`,
+                `(process ${process.ppid})`,
         );
         expect(JSON.parse(await readFile(lock, 'utf8'))).toMatchObject({
             source: 'other/case.md',
@@ -412,6 +413,21 @@ test('Smoke test', async ({ page }) => {
         expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
         expect(existsSync(lock)).toBe(false);
         expect(existsSync(guard)).toBe(false);
+    });
+
+    test('a reservation recording this process, which it does not hold, is taken over', async () => {
+        // In a container every first process is pid 1, so a run killed there
+        // leaves a lock that names the next run's own process.
+        const tests = path.join('.testpilot', 'tests');
+        await mkdir(tests, { recursive: true });
+        const lock = path.join(tests, 'case.json.lock');
+        await writeFile(
+            lock,
+            JSON.stringify({ pid: process.pid, source: 'automation/case.md' }),
+        );
+
+        expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
+        expect(existsSync(lock)).toBe(false);
     });
 
     test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(

@@ -138,7 +138,8 @@ export class Validator {
      * @param step - The execution step's text.
      * @param statements - The statements collected for it.
      * @param page - The agent's page, after the step.
-     * @returns The verdict. A step with no statements is trivially valid.
+     * @returns The verdict. A step with no statements is judged too: only the
+     *   LLM can tell one that needs nothing from a check gone missing.
      * @throws {ValidatorError} If the LLM response is not valid JSON or does not
      *   match the expected shape.
      */
@@ -147,17 +148,9 @@ export class Validator {
         statements: StepStatement[],
         page: Pick<Page, 'url' | 'title'>,
     ): Promise<StepVerdict> {
-        if (statements.length === 0) {
-            logger.info('Step has no statements to validate');
-            return new StepVerdict({
-                isValid: true,
-                reason: 'no browser interaction needed',
-            });
-        }
-
         const prompt = renderPrompt('validator', {
             step,
-            code: numbered(statements),
+            code: statements.length === 0 ? '(no statements)' : numbered(statements),
             page_url: page.url(),
             page_title: await page.title(),
         });

@@ -163,6 +163,19 @@ test('an unreadable dotenv file is a ConfigurationError naming it', async () => 
     expect(() => loadSettings({}, root)).toThrow(/\.env/);
 });
 
+test('a variable after one set to blanks is still read', async () => {
+    // parseEnv reads `KEY= ` as taking the next line for its value.
+    const root = await project({
+        env: 'DATABASE_URL= \nTESTPILOT_MAX_TURNS=7\n',
+        envLocal: 'OTHER=\t\r\nTESTPILOT_SCRIPTS_DIR=e2e\r\n',
+    });
+
+    const settings = loadSettings({}, root);
+
+    expect(settings.mcpMaxTurns).toBe(7);
+    expect(settings.scriptsDir).toBe('e2e');
+});
+
 test('an invalid variable is a ConfigurationError naming it', async () => {
     const root = await project();
 

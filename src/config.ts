@@ -419,13 +419,29 @@ function hasApiKey(value: unknown): boolean {
     );
 }
 
+// An assignment whose value is only blanks, which `parseEnv` would read as
+// taking the next line for its value: `KEY= ` and the blanks.
+const BLANK_VALUE =
+    /^([ \t]*(?:export[ \t]+)?[^\s#=][^=\r\n]*?[ \t]*=)[ \t]+(?=\r?$)/gm;
+
+/**
+ * A dotenv file's variables, as `node:util`'s `parseEnv` reads them, except
+ * that a value of only blanks is empty rather than the next line.
+ *
+ * @param text - The file's content.
+ * @returns The variables it sets.
+ */
+export function readDotenv(text: string): Record<string, string | undefined> {
+    return parseEnv(text.replace(BLANK_VALUE, '$1'));
+}
+
 /** A dotenv file's variables; none if the file does not exist. */
 function readEnvFile(file: string): Record<string, string | undefined> {
     if (!existsSync(file)) {
         return {};
     }
     try {
-        return parseEnv(readFileSync(file, 'utf8'));
+        return readDotenv(readFileSync(file, 'utf8'));
     } catch (error) {
         throw new ConfigurationError(`${path.basename(file)}: ${errorMessage(error)}`, {
             source: path.basename(file),

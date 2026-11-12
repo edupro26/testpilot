@@ -26,7 +26,8 @@ REJECT the code only for a substantive mismatch, such as:
     "Login");
 - it fills a value the step did not ask for;
 - the step requires a verification and the code only performs actions,
-    asserting nothing.
+    asserting nothing;
+- there is no code, and the step asks for an action or a verification.
 
 ACCEPT the code when it accomplishes the step. In particular, do NOT
 reject it for:
@@ -39,7 +40,8 @@ reject it for:
     for "Your email or password is incorrect!"). Playwright shortens long
     text in the locators it generates, and the full text was already checked
     against the live page when this code was produced;
-- being shorter than you expected, when it still does the job.
+- being shorter than you expected, when it still does the job;
+- having no code, when the step needs nothing done in the browser.
 
 OUTPUT SCHEMA
 {"is_valid": true, "reason": "...", "statement_reasons": ["...", "..."]}
