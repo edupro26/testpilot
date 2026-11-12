@@ -1,7 +1,15 @@
 /** Tests for installing the bundled skill into a project or the user's home. */
 
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import {
+    chmod,
+    mkdir,
+    mkdtemp,
+    readdir,
+    readFile,
+    rm,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -56,6 +64,27 @@ test('a re-install replaces the copy, dropping files the source lost', async () 
     expect(existsSync(path.join(destination, 'references', 'a.md'))).toBe(false);
     expect(existsSync(path.join(destination, 'SKILL.md'))).toBe(true);
 });
+
+test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'an update that fails to copy keeps the installed copy',
+    async () => {
+        const destination = path.join(cwd, '.agents/skills/testpilot');
+        await installSkill(destination, source);
+        await writeFile(path.join(source, 'SKILL.md'), '# new skill');
+        await chmod(path.join(source, 'references', 'a.md'), 0o000);
+        try {
+            await expect(installSkill(destination, source)).rejects.toThrow(/EACCES/);
+        } finally {
+            await chmod(path.join(source, 'references', 'a.md'), 0o644);
+        }
+
+        expect(await readFile(path.join(destination, 'SKILL.md'), 'utf8')).toBe(
+            '# skill',
+        );
+        expect(existsSync(path.join(destination, 'references', 'a.md'))).toBe(true);
+        expect(await readdir(path.dirname(destination))).toEqual(['testpilot']);
+    },
+);
 
 test('the bundled skill is where SKILL_SOURCE points', () => {
     expect(existsSync(path.join(SKILL_SOURCE, 'SKILL.md'))).toBe(true);

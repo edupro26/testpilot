@@ -45,6 +45,14 @@ test('replays code verbatim on cumulative state, until a reset', async () => {
     await browser.run([statement("await expect(page).toHaveURL('about:blank');")]);
 });
 
+test('the page sees the plain Chromium a generated spec runs in', async () => {
+    // The spec only pins the locale, so the pipeline's browser launches with no
+    // extra arguments: a site that tells automation apart sees both the same.
+    await browser.run([
+        statement('expect(await page.evaluate(() => navigator.webdriver)).toBe(true);'),
+    ]);
+});
+
 describe('code that does not hold on the page fails at the ceiling', () => {
     // Code that runs is not enough: the locator must be unique and true. An
     // action would otherwise wait 30s for its element, an assertion 5s.

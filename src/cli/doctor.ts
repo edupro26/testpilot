@@ -14,7 +14,6 @@ import {
     ConfigurationError,
     errorMessage,
 } from '../runtime/exceptions.ts';
-import { CHROMIUM_ARGS } from '../validator/browser.ts';
 import { CliExit } from './errors.ts';
 import { MIN_NODE_MAJOR, unsupportedNode } from './node-version.ts';
 import { checkSkills } from './skills.ts';
@@ -288,7 +287,7 @@ export async function doctorCommand(): Promise<void> {
 
 /** Launch and close testpilot's own Chromium, as the pipeline launches it. */
 async function launchOwnChromium(): Promise<void> {
-    const browser = await chromium.launch({ args: [...CHROMIUM_ARGS] });
+    const browser = await chromium.launch();
     await browser.close();
 }
 

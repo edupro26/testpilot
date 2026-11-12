@@ -3,7 +3,18 @@
 # Lint errors ESLint cannot fix are fed back to Claude (exit 2).
 set -uo pipefail
 
-file=$(jq -r '.tool_input.file_path // empty')
+# The input is read with Node, which the project needs anyway; input that
+# cannot be read is reported rather than skipping the checks in silence.
+if ! file=$(node -e '
+  let input = "";
+  process.stdin.on("data", (chunk) => (input += chunk));
+  process.stdin.on("end", () => {
+    process.stdout.write(JSON.parse(input).tool_input?.file_path ?? "");
+  });
+' 2>/dev/null); then
+  echo "Could not read the hook input with node: the file was not formatted or linted." >&2
+  exit 2
+fi
 project="${CLAUDE_PROJECT_DIR:-$PWD}"
 
 case "$file" in

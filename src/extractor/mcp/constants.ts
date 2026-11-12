@@ -1,16 +1,22 @@
 /** Constants for the Playwright MCP client: timeouts, tool lists, code pattern. */
 
+/** How long connecting to Playwright MCP, or listing its tools, may take, in ms. */
 export const CONNECT_TIMEOUT_MS = 60_000;
+/** How long one tool call may take, in ms. */
 export const CALL_TIMEOUT_MS = 180_000;
 
-// The exact code MCP ran for a successful call. TypeScript codegen fences it
-// as `js`.
+/**
+ * The exact code MCP ran for a successful call. TypeScript codegen fences it
+ * as `js`.
+ */
 export const CODE_BLOCK = /### Ran Playwright code\n```js\n([\s\S]*?)\n```/;
 
-// Every tool the agent may call. Withheld: browser_run_code_unsafe (RCE in the
-// server process), browser_close (kills the session the pipeline owns) and
-// browser_verify_list_visible (its aria snapshot spans several lines, and a
-// statement must fit on one).
+/**
+ * Every tool the agent may call. Withheld: browser_run_code_unsafe (RCE in the
+ * server process), browser_close (kills the session the pipeline owns) and
+ * browser_verify_list_visible (its aria snapshot spans several lines, and a
+ * statement must fit on one).
+ */
 export const ALLOWED_TOOLS: readonly string[] = [
     'browser_navigate',
     'browser_navigate_back',
@@ -41,12 +47,14 @@ export const ALLOWED_TOOLS: readonly string[] = [
     'browser_verify_value',
 ];
 
-// The subset whose emitted code may enter the script: the test's actions and
-// assertions, each a self-contained line. The others explore (snapshot, find,
-// evaluate, screenshots, logs), change the environment rather than the page
-// (resize, emulate_media), emit code that depends on a variable from an
-// earlier line (file_upload, handle_dialog, tabs, drop), or wait in the
-// agent's browser only (wait_for: the script's timing is measured instead).
+/**
+ * The subset whose emitted code may enter the script: the test's actions and
+ * assertions, each a self-contained line. The others explore (snapshot, find,
+ * evaluate, screenshots, logs), change the environment rather than the page
+ * (resize, emulate_media), emit code that depends on a variable from an
+ * earlier line (file_upload, handle_dialog, tabs, drop), or wait in the
+ * agent's browser only (wait_for: the script's timing is measured instead).
+ */
 export const COLLECTABLE_TOOLS: ReadonlySet<string> = new Set([
     'browser_navigate',
     'browser_navigate_back',

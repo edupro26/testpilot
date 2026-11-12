@@ -1,7 +1,8 @@
 /** The skill testpilot bundles for AI agents, and where it is installed. */
 
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { cp, readdir, readFile, rm } from 'node:fs/promises';
+import { cp, readdir, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { errorMessage } from '../runtime/exceptions.ts';
@@ -60,17 +61,42 @@ export function skillDir(
  * Copy the skill to `destination`, replacing any copy already there, so files
  * the source no longer has are gone from the copy.
  *
+ * The skill is copied beside `destination` first and swapped in once whole, so
+ * a copy that fails (a full disk, a file that cannot be read) leaves the
+ * installed one as it was.
+ *
  * @param destination - The `testpilot` skill folder to write.
  * @param source - The folder to copy; the bundled skill by default.
  * @returns `'updated'` if there was a copy, else `'installed'`.
+ * @throws {NodeJS.ErrnoException} What kept the skill from being copied or
+ *   swapped in.
  */
 export async function installSkill(
     destination: string,
     source: string = SKILL_SOURCE,
 ): Promise<'installed' | 'updated'> {
     const existed = existsSync(destination);
-    await rm(destination, { recursive: true, force: true });
-    await cp(source, destination, { recursive: true });
+    const copy = `${destination}.${randomUUID()}.new`;
+    const old = `${destination}.${randomUUID()}.old`;
+    try {
+        await cp(source, copy, { recursive: true });
+        if (existed) {
+            await rename(destination, old);
+        }
+        try {
+            await rename(copy, destination);
+        } catch (error) {
+            if (existed) {
+                await rename(old, destination);
+            }
+            throw error;
+        }
+    } catch (error) {
+        // A leftover partial copy is harmless; the error that matters is this one.
+        await rm(copy, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+    }
+    await rm(old, { recursive: true, force: true });
     return existed ? 'updated' : 'installed';
 }
 

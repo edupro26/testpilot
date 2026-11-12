@@ -8,7 +8,7 @@ import path from 'node:path';
 import { beforeEach, expect, type MockInstance, test, vi } from 'vitest';
 
 import type { Check } from '../../src/cli/doctor.ts';
-import { initCommand, readTestDir } from '../../src/cli/init.ts';
+import { initCommand, readTestDirs } from '../../src/cli/init.ts';
 import { checkSkills } from '../../src/cli/skills.ts';
 import { loadSettings } from '../../src/config.ts';
 
@@ -59,23 +59,49 @@ beforeEach(() => {
     };
 });
 
-test('readTestDir reads a literal and nothing else', () => {
-    expect(readTestDir("testDir: './tests',")).toBe('./tests');
-    expect(readTestDir('testDir: "e2e"')).toBe('e2e');
-    expect(readTestDir('testDir: `specs`')).toBe('specs');
-    expect(readTestDir('export default defineConfig({})')).toBeUndefined();
-    expect(readTestDir("testDir: path.join(__dirname, 'e2e')")).toBeUndefined();
-    expect(readTestDir('testDir: `${root}/e2e`')).toBeUndefined();
-    expect(readTestDir("testDir: './e2e' + '/smoke',")).toBeUndefined();
-    expect(readTestDir("testDir: 'e2e'.concat('/smoke')")).toBeUndefined();
-    expect(readTestDir("{ testDir: 'e2e' }")).toBe('e2e');
-    expect(readTestDir("testDir: 'e2e' // the specs\n,")).toBe('e2e');
+/** The top-level `testDir` read from a config exporting `{ <properties> }`. */
+function topTestDir(properties: string): string | null | undefined {
+    return readTestDirs(`export default defineConfig({ ${properties} });`).testDir;
+}
+
+test('readTestDirs reads a literal and nothing else', () => {
+    expect(topTestDir("testDir: './tests',")).toBe('./tests');
+    expect(topTestDir('testDir: "e2e"')).toBe('e2e');
+    expect(topTestDir('testDir: `specs`')).toBe('specs');
+    expect(topTestDir('')).toBeUndefined();
+    expect(topTestDir("testDir: path.join(__dirname, 'e2e')")).toBeNull();
+    expect(topTestDir('testDir: `${root}/e2e`')).toBeNull();
+    expect(topTestDir("testDir: './e2e' + '/smoke',")).toBeNull();
+    expect(topTestDir("testDir: 'e2e'.concat('/smoke')")).toBeNull();
+    expect(topTestDir("testDir: 'e2e' // the specs\n,")).toBe('e2e');
 });
 
-test('readTestDir skips comments but not URLs', () => {
-    expect(readTestDir("// testDir: './old',\ntestDir: './e2e'")).toBe('./e2e');
-    expect(readTestDir("/* testDir: 'x' */ testDir: 'y'")).toBe('y');
-    expect(readTestDir("use: { baseURL: 'http://a' }, testDir: 'z'")).toBe('z');
+test('readTestDirs skips comments but not URLs', () => {
+    expect(topTestDir("// testDir: './old',\ntestDir: './e2e'")).toBe('./e2e');
+    expect(topTestDir("/* testDir: 'x' */ testDir: 'y'")).toBe('y');
+    expect(topTestDir("use: { baseURL: 'http://a' }, testDir: 'z'")).toBe('z');
+});
+
+test('readTestDirs finds the config however it is exported', () => {
+    for (const configText of [
+        "export default { testDir: 'e2e' };",
+        "export default { testDir: 'e2e' } satisfies PlaywrightTestConfig;",
+        "const config = { testDir: 'e2e' };\nexport default config;",
+        "module.exports = defineConfig({ testDir: 'e2e' });",
+    ]) {
+        expect(readTestDirs(configText).testDir).toBe('e2e');
+    }
+});
+
+test("readTestDirs keeps a project's testDir apart from the top-level one", () => {
+    const dirs = readTestDirs(
+        'export default defineConfig({\n' +
+            "  projects: [{ name: 'api', testDir: './api' }, { name: 'chromium' }],\n" +
+            "  testDir: './e2e',\n" +
+            '});',
+    );
+
+    expect(dirs).toEqual({ testDir: './e2e', projects: ['./api', undefined] });
 });
 
 test('init writes the scripts folder and the .gitignore, nothing else', async () => {
@@ -197,6 +223,36 @@ test('without a literal testDir the scripts go to testpilot/', async () => {
     const unset = await project('export default {};');
     await initCommand({ cwd: unset, checks: checks() });
     expect(JSON.parse(await readConfig(unset))).toEqual({ scriptsDir: 'testpilot' });
+});
+
+test("a project's testDir is not taken for the whole config's", async () => {
+    // The API project comes first, but it is not where every project looks:
+    // the scripts go to the top-level folder, and init says the projects differ.
+    const cwd = await project(
+        'export default defineConfig({\n' +
+            "  projects: [{ name: 'api', testDir: './api' }, { name: 'chromium' }],\n" +
+            "  testDir: './e2e',\n" +
+            '});',
+    );
+
+    await initCommand({ cwd, checks: checks() });
+
+    expect(JSON.parse(await readConfig(cwd))).toEqual({ scriptsDir: 'e2e/testpilot' });
+    expect(printed()).toContain(
+        '! The projects in playwright.config.ts use different test folders ' +
+            '(api, e2e)',
+    );
+});
+
+test('the folder every project shares is where the scripts go', async () => {
+    const cwd = await project(
+        "export default defineConfig({ projects: [{ name: 'ui', testDir: './ui' }] });",
+    );
+
+    await initCommand({ cwd, checks: checks() });
+
+    expect(JSON.parse(await readConfig(cwd))).toEqual({ scriptsDir: 'ui/testpilot' });
+    expect(printed()).not.toContain('!');
 });
 
 test('init --skills installs the skill even when a check fails', async () => {

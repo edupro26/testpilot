@@ -46,9 +46,13 @@ export const TestCaseSchema = z.object({
     modules: z.array(ModuleSchema),
 });
 
+/** A validated statement, as `StepStatementSchema` parses it. */
 export type StepStatement = z.infer<typeof StepStatementSchema>;
+/** A step and its statements, as `ExecutionStepSchema` parses it. */
 export type ExecutionStep = z.infer<typeof ExecutionStepSchema>;
+/** A module of a test case, as `ModuleSchema` parses it. */
 export type Module = z.infer<typeof ModuleSchema>;
+/** A full test case, as `TestCaseSchema` parses it. */
 export type TestCase = z.infer<typeof TestCaseSchema>;
 
 /** Where a step sits in a test case, by module and step index. */

@@ -17,6 +17,7 @@ import {
 /** Supported values for the llmProvider setting. */
 export const LLM_PROVIDER_NAMES = ['azure_openai'] as const;
 
+/** One of `LLM_PROVIDER_NAMES`. */
 export type LLMProviderName = (typeof LLM_PROVIDER_NAMES)[number];
 
 /** The project folder testpilot keeps its files in. */

@@ -148,8 +148,11 @@ export function playwrightServer(
                 context,
                 connect: (transport) => server.connect(transport),
                 close: async () => {
-                    await server.close();
-                    await browser.close();
+                    try {
+                        await server.close();
+                    } finally {
+                        await browser.close();
+                    }
                 },
             };
         } catch (error) {

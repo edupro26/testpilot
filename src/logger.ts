@@ -5,8 +5,10 @@ import { inspect } from 'node:util';
 
 import { errorMessage } from './runtime/exceptions.ts';
 
+/** The log levels, least severe first: a logger prints its level and above. */
 export const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] as const;
 
+/** One of `LOG_LEVELS`. */
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 const LEVEL_COLORS: Record<LogLevel, string> = {

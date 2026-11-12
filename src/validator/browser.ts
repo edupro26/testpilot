@@ -25,11 +25,6 @@ import { trim } from './utils.ts';
 // limit on `browser_wait_for`.
 const REPLAY_TIMEOUT_MS = 30_000;
 
-/** Chromium arguments for both pipeline browsers, so a page behaves the same. */
-export const CHROMIUM_ARGS: readonly string[] = [
-    '--disable-blink-features=AutomationControlled',
-];
-
 /** Raised when a statement fails to execute against the live page. */
 export class BrowserError extends Error {
     override name = 'BrowserError';
@@ -94,7 +89,9 @@ export async function runStatements(
 }
 
 /**
- * Launch Chromium the way both pipeline browsers need it.
+ * Launch Chromium the way both pipeline browsers need it: plain, with no extra
+ * arguments, as Playwright Test launches it for the generated script, so a site
+ * sees the extraction, the replay and the test run alike.
  *
  * @param headless - Whether to run without a window.
  * @returns The browser.
@@ -102,7 +99,7 @@ export async function runStatements(
  */
 export async function launchChromium(headless: boolean): Promise<Browser> {
     try {
-        return await chromium.launch({ headless, args: [...CHROMIUM_ARGS] });
+        return await chromium.launch({ headless });
     } catch (error) {
         throw new BrowserLaunchError(
             `Could not launch Chromium: ${errorMessage(error)}`,

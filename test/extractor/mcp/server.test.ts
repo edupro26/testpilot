@@ -5,7 +5,7 @@ import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { BrowserContext } from '@playwright/test';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import {
     ALLOWED_TOOLS,
@@ -218,6 +218,31 @@ describe('PlaywrightMCP', () => {
 
         expect(snapshot.isError).toBe(false);
         expect(snapshot.content).toContain('Restored by the pipeline');
+    });
+
+    test('a server that fails to close still closes its browser', async () => {
+        // Every reset and every failed connection closes the session this way;
+        // a rejecting server close must not leave Chromium running.
+        vi.resetModules();
+        vi.doMock('@playwright/mcp', () => ({
+            createConnection: () =>
+                Promise.resolve({
+                    connect: () => Promise.resolve(),
+                    close: () => Promise.reject(new Error('server close failed')),
+                }),
+        }));
+        try {
+            const { playwrightServer: mocked } =
+                await import('../../../src/extractor/mcp/server.ts');
+            const session = await mocked('en-US')();
+            const browser = session.context?.browser();
+
+            await expect(session.close()).rejects.toThrow('server close failed');
+            expect(browser?.isConnected()).toBe(false);
+        } finally {
+            vi.doUnmock('@playwright/mcp');
+            vi.resetModules();
+        }
     });
 
     test("the agent's page is the tab Playwright MCP has selected", async () => {
