@@ -1,0 +1,11 @@
+# Prose and prompt templates are written by hand.
+*.md
+
+package-lock.json
+output/
+.testpilot/
+.playwright-mcp/
+playwright-report/
+test-results/
+.claude/
+.venv/

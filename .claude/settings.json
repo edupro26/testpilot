@@ -1,18 +1,61 @@
 {
+  "model": "opus",
+  "effortLevel": "high",
   "permissions": {
+    "defaultMode": "auto",
     "allow": [
-      "Bash(uv *)",
-      "Bash(ruff *)",
-      "Bash(pytest *)"
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(npm ls *)",
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npx prettier *)",
+      "Bash(npx vitest *)",
+      "Bash(npx playwright test *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch --list *)",
+      "Bash(git rev-parse *)",
+      "Bash(git rev-list *)",
+      "Bash(git fetch *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh issue view *)",
+      "Bash(gh issue list *)",
+      "WebFetch(domain:playwright.dev)",
+      "WebFetch(domain:github.com)"
     ],
     "ask": [
       "Bash(git commit *)",
       "Bash(git push *)",
-      "Bash(rm *)"
+      "Bash(rm *)",
+      "Bash(npm install *)",
+      "Bash(npm uninstall *)",
+      "Bash(npm update *)",
+      "Bash(node src/main.ts *)",
+      "Bash(npm run testpilot *)",
+      "Bash(testpilot *)",
+      "Bash(git reset *)",
+      "Bash(git rebase *)",
+      "Bash(git merge *)",
+      "Bash(git restore *)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- *)",
+      "Bash(git branch -D *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge *)",
+      "Read(.env.example)",
+      "Bash(cat .env.example)"
     ],
     "deny": [
       "Read(.env)",
-      "Read(./secrets/**)"
+      "Edit(.env)",
+      "Read(./secrets/**)",
+      "Edit(package-lock.json)"
     ],
     "disableBypassPermissionsMode": "disable"
   },
@@ -21,14 +64,29 @@
     "pr": ""
   },
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/format-on-edit.sh\"",
+            "timeout": 60,
+            "statusMessage": "Formatting with Prettier and ESLint..."
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python -c \"import json,sys,re; d=json.load(sys.stdin); c=(d.get('tool_input') or {}).get('command','') or ''; deny = re.search(r'\\bpip[0-9.]*\\s+install\\b', c) and not re.search(r'\\buv\\s+pip[0-9.]*\\s+install\\b', c); print(json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'deny','permissionDecisionReason':'This project is uv-only per AGENTS.md - use uv add / uv pip install instead of bare pip.'}})) if deny else print('{}')\"",
-            "statusMessage": "Checking for pip usage..."
+            "if": "Bash(git commit *)",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-before-commit.sh\"",
+            "timeout": 180,
+            "statusMessage": "Running type-check, lint and tests before commit..."
           }
         ]
       }
