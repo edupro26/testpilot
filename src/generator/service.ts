@@ -9,19 +9,23 @@
 
 import type { LLMProvider } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
-import { statement, type TestCase } from '../model/test-case.ts';
+import { statement, type StepStatement, type TestCase } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
 import { GeneratorError } from '../runtime/exceptions.ts';
 import {
     describeSteps,
     localeSetting,
-    missingLines,
+    missingStatements,
     stripFence,
     syntaxDiagnostics,
     timeoutSetting,
 } from './utils.ts';
 
 const SYSTEM_PROMPT = 'You are an expert QA automation engineer.';
+
+// Scripts the LLM may write before the run fails: a rejected one is written
+// again, told why, rather than losing the run that validated its statements.
+const MAX_ATTEMPTS = 2;
 
 /** Assembles a validated TestCase into an executable script. */
 export class Generator {
@@ -73,38 +77,58 @@ export class Generator {
                 `Statements replayed in ${(runTimeMs / 1000).toFixed(1)}s: ${timeout}`,
             );
         }
-        const response = await this.llm.complete({
-            systemPrompt: SYSTEM_PROMPT,
-            userPrompt: renderPrompt('generator', {
-                test_case_name: testCase.name,
-                locale_setting: setting,
-                timeout_setting: timeout ?? '(none)',
-                steps: describeSteps(steps),
-            }),
+        const prompt = renderPrompt('generator', {
+            test_case_name: testCase.name,
+            locale_setting: setting,
+            timeout_setting: timeout ?? '(none)',
+            steps: describeSteps(steps),
         });
-        const script = `${stripFence(response).trim()}\n`;
-
-        const syntaxErrors = syntaxDiagnostics(script);
-        if (syntaxErrors.length > 0) {
-            throw new GeneratorError(
-                `Generated script does not compile: ${syntaxErrors.join('; ')}`,
-                { code: 'SCRIPT_ASSEMBLY_FAILED' },
-            );
-        }
-
         const required = [setting, ...(timeout === undefined ? [] : [timeout])].map(
             (code) => statement(code),
         );
-        const missing = missingLines(script, [...required, ...statements]);
-        if (missing.length > 0) {
-            throw new GeneratorError(
-                'Generated script dropped or altered validated code:\n' +
-                    missing.map((line) => `  ${line}`).join('\n'),
-                { code: 'SCRIPT_ASSEMBLY_FAILED' },
-            );
+        let feedback = '';
+        for (let attempt = 1; ; attempt++) {
+            const response = await this.llm.complete({
+                systemPrompt: SYSTEM_PROMPT,
+                userPrompt: prompt + feedback,
+            });
+            const script = `${stripFence(response).trim()}\n`;
+            const problem = rejection(script, [...required, ...statements]);
+            if (problem === undefined) {
+                logger.info(`Assembled ${script.length} char(s) of script`);
+                return script;
+            }
+            if (attempt === MAX_ATTEMPTS) {
+                throw new GeneratorError(problem, { code: 'SCRIPT_ASSEMBLY_FAILED' });
+            }
+            logger.warning(`Script rejected, writing it again: ${problem}`);
+            feedback =
+                `\n\nYOUR PREVIOUS SCRIPT WAS REJECTED:\n${problem}\n` +
+                'Write the whole script again, fixing that.\n';
         }
-
-        logger.info(`Assembled ${script.length} char(s) of script`);
-        return script;
     }
+}
+
+/**
+ * Why `script` cannot ship, if it cannot.
+ *
+ * @param script - The LLM's script.
+ * @param required - The settings and validated statements it must contain, in
+ *   order.
+ * @returns The problem; `undefined` when the script compiles and writes every
+ *   required statement unaltered.
+ */
+function rejection(script: string, required: StepStatement[]): string | undefined {
+    const syntaxErrors = syntaxDiagnostics(script);
+    if (syntaxErrors.length > 0) {
+        return `Generated script does not compile: ${syntaxErrors.join('; ')}`;
+    }
+    const missing = missingStatements(script, required);
+    if (missing.length > 0) {
+        return (
+            'Generated script dropped or altered validated code:\n' +
+            missing.map((line) => `  ${line}`).join('\n')
+        );
+    }
+    return undefined;
 }

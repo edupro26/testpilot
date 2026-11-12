@@ -80,6 +80,15 @@ test('config list with a broken config.json exits 2 naming the file', async () =
     expect(stdout()).toBe('');
 });
 
+test('updateDotenv replaces a key on a first line after a byte order mark', () => {
+    // Not appended a second time; the mark is kept.
+    expect(
+        updateDotenv('\uFEFFTESTPILOT_LOG_LEVEL=INFO\n', {
+            TESTPILOT_LOG_LEVEL: 'DEBUG',
+        }),
+    ).toBe('\uFEFFTESTPILOT_LOG_LEVEL=DEBUG\n');
+});
+
 test('updateDotenv replaces in place and keeps everything else', () => {
     const before =
         '# mine\r\nAPP=1\r\nexport TESTPILOT_AZURE_OPENAI_ENDPOINT=old\r\nZ=2';

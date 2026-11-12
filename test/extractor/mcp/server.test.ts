@@ -136,6 +136,17 @@ describe('PlaywrightMCP', () => {
         );
     });
 
+    test('a server that cannot list its tools fails with a named error', async () => {
+        // One with no tools does not answer tools/list at all.
+        const error = await PlaywrightMCP.connect(fakeServer([])).catch(
+            (e: unknown) => e,
+        );
+
+        expect(error).toBeInstanceOf(McpError);
+        expect((error as McpError).code).toBe('BROWSER_AGENT_FAILED');
+        expect(String(error)).toMatch(/Could not list Playwright MCP's tools/);
+    });
+
     test.each([
         {
             id: 'the server fails to connect',

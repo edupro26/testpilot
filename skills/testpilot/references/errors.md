@@ -366,7 +366,8 @@ change.
 **Exit:** 1
 
 **Cause:** in the `generate` stage, the assembled script does not compile, or it
-dropped or altered code that had been validated. The message says which.
+dropped or altered code that had been validated, and it still did when written
+again. The message says which.
 
 **Hint:** The generated script does not compile, or dropped or altered validated code. This is usually a one-off, so try again; the validated test case JSON was written to `.testpilot/tests/`.
 

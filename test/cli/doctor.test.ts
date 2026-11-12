@@ -153,6 +153,25 @@ test('an API key in config.json gets the remove-it fix', async () => {
     );
 });
 
+test('an invalid setting fails the configuration check, not the LLM settings', async () => {
+    // init lets missing LLM settings pass, to be set later; not a bad file.
+    const root = await emptyDir();
+    await mkdir(path.join(root, '.testpilot'));
+    await writeFile(
+        path.join(root, '.testpilot', 'config.json'),
+        JSON.stringify({ maxTurns: -1, bogusKey: 1 }),
+    );
+
+    expect(checkLlmSettings(AZURE_ENV, root)).toMatchObject({
+        name: 'Configuration',
+        status: 'fail',
+    });
+    expect(checkLlmSettings({}, await emptyDir())).toMatchObject({
+        name: 'LLM settings',
+        status: 'fail',
+    });
+});
+
 test('a bad value names the file or place to fix', async () => {
     const root = await emptyDir();
     await mkdir(path.join(root, '.testpilot'));

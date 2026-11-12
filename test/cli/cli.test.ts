@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { runCli } from '../../src/cli/cli.ts';
+import { reportUncaught, runCli } from '../../src/cli/cli.ts';
 import { stderr, useCapturedOutput, useIsolatedSettingsEnv } from '../helpers.ts';
 
 describe('runCli exit codes', () => {
@@ -29,5 +29,29 @@ describe('runCli exit codes', () => {
         expect(stderr()).toContain(
             "unknown agent 'cursor' for --skills; use agents, copilot or claude",
         );
+    });
+});
+
+describe('a failure no command handled', () => {
+    useCapturedOutput();
+
+    test('from the file system is a setup error, without a stack', () => {
+        // commands.md: exit 1 means the test case failed to generate.
+        const error = Object.assign(
+            new Error("EACCES: permission denied, mkdir '/project/.testpilot'"),
+            { code: 'EACCES', syscall: 'mkdir', path: '/project/.testpilot' },
+        );
+
+        expect(reportUncaught(error)).toBe(2);
+        expect(stderr()).toContain(
+            "EACCES: permission denied, mkdir '/project/.testpilot'",
+        );
+        expect(stderr()).not.toContain('    at ');
+    });
+
+    test('from anything else is reported as an internal error', () => {
+        expect(reportUncaught(new TypeError('x is undefined'))).toBe(1);
+        expect(stderr()).toContain('INTERNAL_ERROR: x is undefined');
+        expect(stderr()).toContain('Hint: ');
     });
 });

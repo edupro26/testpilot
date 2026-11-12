@@ -390,12 +390,21 @@ async function closeSession({ client, server }: Session): Promise<void> {
  * The tool surface moves with each Playwright release, so this turns an
  * upstream rename into a named error rather than a quietly degraded agent.
  *
- * @throws {McpError} If the server does not offer every allowlisted tool.
+ * @throws {McpError} If the tools cannot be listed, or the server does not
+ *   offer every allowlisted tool.
  */
 async function resolveTools(client: Client): Promise<McpTool[]> {
-    const { tools } = await client.listTools(undefined, {
-        timeout: CONNECT_TIMEOUT_MS,
-    });
+    let tools: Awaited<ReturnType<Client['listTools']>>['tools'];
+    try {
+        ({ tools } = await client.listTools(undefined, {
+            timeout: CONNECT_TIMEOUT_MS,
+        }));
+    } catch (error) {
+        throw new McpError(
+            `Could not list Playwright MCP's tools: ${errorMessage(error)}`,
+            { code: 'BROWSER_AGENT_FAILED', cause: error },
+        );
+    }
     const offered = new Map(tools.map((tool) => [tool.name, tool]));
     const missing = ALLOWED_TOOLS.filter((name) => !offered.has(name));
     if (missing.length > 0) {

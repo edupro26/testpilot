@@ -69,7 +69,8 @@ project's own variables are never picked up.
 
 The five Azure OpenAI settings, the API key included, have no default and are all
 required: `generate` stops with `LLM_SETTINGS_MISSING` while one is not set, and
-`doctor` fails its LLM settings check.
+`doctor` fails its LLM settings check. An invalid value or file fails its
+Configuration check instead, which also stops `init`.
 
 ### The dotenv files
 

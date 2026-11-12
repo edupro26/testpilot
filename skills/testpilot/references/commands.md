@@ -42,7 +42,8 @@ so they are the developer's call.
 Checks that testpilot and this project are set up: the Node.js version, that
 testpilot's own Chromium build launches, that the project has `@playwright/test`
 and that it is not older than testpilot's, that the project has a
-`playwright.config.*`, and that the LLM settings are complete and valid. It also
+`playwright.config.*`, that the configuration is valid, and that the LLM settings
+are complete. It also
 checks every installed copy of this skill against the installed testpilot.
 
 Run it when you are unsure of the setup: before the first `generate` in a project,
@@ -59,7 +60,7 @@ Then act on each fix as the table above says:
   missing or older than testpilot's, there is no Playwright config): ask first. The
   Chromium fix runs `npx playwright install` in testpilot's own folder: it downloads
   testpilot's Chromium build into the shared Playwright cache.
-- The LLM settings: see `configuration.md`.
+- The Configuration and LLM settings checks: see `configuration.md`.
 - An out-of-date copy of this skill (`! Skill: <path> is outdated`): the fix is a
   `testpilot init --skills ...` command. It replaces that copy entirely, including
   any change the developer made to it by hand, so say so and run it when the

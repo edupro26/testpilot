@@ -11,18 +11,6 @@ const DEFAULT_TEST_TIMEOUT_MS = 30_000;
 // slower on another run.
 const TIMEOUT_MARGIN = 2;
 
-// A `timeout: <ms>` option, its value written with or without `_` separators.
-const TIMEOUT_OPTION = String.raw`timeout:\s*([\d_]+)`;
-
-// Where the LLM may put the timeout option, in the order tried: an options
-// object of its own (with the comma before it), after an existing option,
-// before one.
-const TIMEOUT_PLACEMENTS = [
-    new RegExp(String.raw`(?:,\s*)?\{\s*${TIMEOUT_OPTION}\s*,?\s*\}`),
-    new RegExp(String.raw`,\s*${TIMEOUT_OPTION}`),
-    new RegExp(String.raw`${TIMEOUT_OPTION}\s*,\s*`),
-];
-
 /**
  * Pins the locale these locators were validated under, quoted the way
  * Playwright's codegen quotes the statements.
@@ -98,14 +86,17 @@ export function syntaxDiagnostics(script: string): string[] {
 /**
  * Return the `required` statements not written, in order, in `script`, as the
  * prompt showed them.
+ *
+ * Statements are compared token by token, so how the LLM lays one out (wrapped
+ * across lines, with a comment, or with a formatter's trailing comma) is its own.
  */
-export function missingLines(script: string, required: StepStatement[]): string[] {
-    const lines = script.split('\n').map((line) => line.trim());
+export function missingStatements(script: string, required: StepStatement[]): string[] {
+    const written = scriptStatements(script);
     const missing: string[] = [];
     let position = 0;
     for (const wanted of required.filter((s) => s.code.trim() !== '')) {
-        const found = lines.findIndex(
-            (line, index) => index >= position && writes(line, wanted),
+        const found = written.findIndex(
+            (node, index) => index >= position && writes(node, wanted),
         );
         if (found === -1) {
             missing.push(describeStatement(wanted).trim());
@@ -114,6 +105,25 @@ export function missingLines(script: string, required: StepStatement[]): string[
         }
     }
     return missing;
+}
+
+/** Every expression statement in `script`, nested ones included, in order. */
+function scriptStatements(script: string): ts.ExpressionStatement[] {
+    const source = ts.createSourceFile(
+        'script.ts',
+        script,
+        ts.ScriptTarget.Latest,
+        true,
+    );
+    const found: ts.ExpressionStatement[] = [];
+    const visit = (node: ts.Node): void => {
+        if (ts.isExpressionStatement(node)) {
+            found.push(node);
+        }
+        node.forEachChild(visit);
+    };
+    visit(source);
+    return found;
 }
 
 /**
@@ -127,56 +137,96 @@ function describeStatement(statement: StepStatement): string {
 }
 
 /**
- * Whether a script line is the statement, as the LLM was asked to write it.
+ * Whether a script statement is the validated one, as the LLM was asked to
+ * write it.
  *
- * @param line - A line of the script, trimmed.
+ * @param node - A statement of the script.
  * @param statement - The validated statement.
- * @returns True if `line` is the statement's code verbatim and, when it has a
- *   timeout, with exactly that timeout added as a matcher option.
+ * @returns True if `node` is the statement's code and, when it has a timeout,
+ *   with exactly that timeout added as an option of its outermost call: the
+ *   matcher's or the action's, not the locator's.
  */
-function writes(line: string, statement: StepStatement): boolean {
-    const code = statement.code.trim();
+function writes(node: ts.ExpressionStatement, statement: StepStatement): boolean {
+    const code = tokens(statement.code);
     if (statement.timeout === undefined) {
-        return line === code;
+        return tokens(node.getText()) === code;
     }
-    for (const placement of TIMEOUT_PLACEMENTS) {
-        const match = placement.exec(line);
-        if (match !== null) {
-            const ms = Number(match[1]?.replaceAll('_', ''));
-            const rest =
-                line.slice(0, match.index) + line.slice(match.index + match[0].length);
-            return (
-                ms === statement.timeout &&
-                rest === code &&
-                match.index >= (argumentsStart(line) ?? Infinity)
-            );
-        }
+    const option = timeoutOption(node);
+    if (option?.ms !== statement.timeout) {
+        return false;
     }
-    return false;
+    const text = node.getSourceFile().text;
+    const rest =
+        text.slice(node.getStart(), option.start) + text.slice(option.end, node.end);
+    return tokens(rest) === code;
 }
 
 /**
- * Where the arguments of a statement's outermost call begin: past
- * `.toBeVisible` in `await expect(locator).toBeVisible()`, so an option found
- * from there on is the matcher's (or the action's) and not the locator's.
- *
- * @param line - A statement, trimmed.
- * @returns The offset in `line`; `undefined` when it is not a call.
+ * The `timeout` option among the arguments of a statement's outermost call,
+ * and the span to cut to remove it: the whole options object (with the comma
+ * before it) when it holds nothing else, or the property and a comma beside it.
  */
-function argumentsStart(line: string): number | undefined {
-    const source = ts.createSourceFile('statement.ts', line, ts.ScriptTarget.Latest);
-    const [first] = source.statements;
-    if (first === undefined || !ts.isExpressionStatement(first)) {
-        return undefined;
-    }
-    let expression = first.expression;
+function timeoutOption(
+    node: ts.ExpressionStatement,
+): { ms: number; start: number; end: number } | undefined {
+    let expression = node.expression;
     while (
         ts.isAwaitExpression(expression) ||
         ts.isParenthesizedExpression(expression)
     ) {
         expression = expression.expression;
     }
-    return ts.isCallExpression(expression) ? expression.expression.end : undefined;
+    if (!ts.isCallExpression(expression)) {
+        return undefined;
+    }
+    const args = expression.arguments;
+    for (const [index, arg] of args.entries()) {
+        if (!ts.isObjectLiteralExpression(arg)) {
+            continue;
+        }
+        const properties = arg.properties;
+        const at = properties.findIndex(
+            (property) =>
+                ts.isPropertyAssignment(property) &&
+                property.name.getText() === 'timeout' &&
+                ts.isNumericLiteral(property.initializer),
+        );
+        const property = properties[at] as ts.PropertyAssignment | undefined;
+        if (property === undefined) {
+            continue;
+        }
+        const ms = Number(property.initializer.getText().replaceAll('_', ''));
+        if (properties.length === 1) {
+            const before = args[index - 1];
+            return before === undefined
+                ? { ms, start: arg.getStart(), end: arg.end }
+                : { ms, start: before.end, end: arg.end };
+        }
+        const next = properties[at + 1];
+        return next === undefined
+            ? { ms, start: (properties[at - 1] as ts.Node).end, end: property.end }
+            : { ms, start: property.getStart(), end: next.getStart() };
+    }
+    return undefined;
+}
+
+/**
+ * Code as a string of its tokens, comments and layout left out, and a trailing
+ * comma before a closing bracket too.
+ */
+function tokens(code: string): string {
+    const scanner = ts.createScanner(ts.ScriptTarget.Latest, true);
+    scanner.setText(code);
+    const found: string[] = [];
+    for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken;) {
+        found.push(scanner.getTokenText());
+        kind = scanner.scan();
+    }
+    return found
+        .filter(
+            (token, index) => token !== ',' || !/^[)\]}]$/.test(found[index + 1] ?? ''),
+        )
+        .join(' ');
 }
 
 /** Milliseconds with `_` thousands separators, as Playwright code writes them. */

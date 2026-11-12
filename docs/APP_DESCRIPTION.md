@@ -157,8 +157,9 @@ If the replay fails at step N, that step is **re-extracted** in the Agent Loop w
     prompt marks it: `toBeVisible()` becomes
     `toBeVisible({ timeout: 12_000 })`. The result must parse and must
     contain every statement and setting unchanged and in order, a timed
-    assertion with exactly its timeout added; otherwise the run fails. There
-    is no retry, and the validated JSON is already on disk
+    assertion with exactly its timeout added. A script that is not is written
+    again once, with the LLM told why; a second failure fails the run, with
+    the validated JSON already on disk
 
 **Output**: The executable test script file
 
@@ -241,7 +242,7 @@ Some pages render their content well after loading, or after a click (an OutSyst
 The generated script must run in any Playwright project, so every wait it needs is in the script itself, and is measured rather than guessed:
 - **Actions need nothing.** In Playwright Test, actions (`click`, `fill`, `goto`, ...) wait for their element with no time limit but the test's, so they never carry a timeout.
 - **Assertions are timed in the replay.** The Validation Browser lets every assertion wait up to 30 seconds (Playwright MCP's own limit on `browser_wait_for`) and times it. One that passed after more than half of Playwright's 5-second default gets a `timeout` of twice what it took, rounded up to whole seconds; across rounds, an assertion keeps the largest. Content still missing after 30 seconds is a failure.
-- **The Generator writes it into the matcher**: the prompt shows the statement with a `[timeout: 18_000]` marker, the LLM adds the option, and the verbatim check accepts the line only if, without that option, it is the validated code and the value is the measured one. For example, `await expect(page.getByText('Produtos WOO')).toBeVisible({ timeout: 18_000 });`: one line per assertion, no wait statement before it, and no extractor round spent on late content.
+- **The Generator writes it into the matcher**: the prompt shows the statement with a `[timeout: 18_000]` marker, the LLM adds the option, and the verbatim check accepts the statement only if, without that option, it is the validated code and the value is the measured one. Statements are compared token by token, so the LLM may wrap one across lines or comment it. For example, `await expect(page.getByText('Produtos WOO')).toBeVisible({ timeout: 18_000 });`: one line per assertion, no wait statement before it, and no extractor round spent on late content.
 - **The test timeout is measured too.** The successful replay runs the whole script from a fresh context, back to back, so its duration is the script's run time. When twice that exceeds Playwright's default 30 seconds, the Generator pins `test.setTimeout(...)` (rounded up to 10 seconds) as the first line of the test.
 
 The agent may still use `browser_wait_for` to wait in its own browser, but its line never goes into the script.

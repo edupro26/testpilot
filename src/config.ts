@@ -337,7 +337,7 @@ export async function readConfigObject(
 ): Promise<Record<string, unknown> | undefined> {
     let raw: unknown;
     try {
-        raw = JSON.parse(await readFile(file, 'utf8'));
+        raw = JSON.parse(withoutBom(await readFile(file, 'utf8')));
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
             return undefined;
@@ -368,7 +368,7 @@ function readConfigFile(file: string): Record<string, string> {
     }
     let raw: unknown;
     try {
-        raw = JSON.parse(readFileSync(file, 'utf8'));
+        raw = JSON.parse(withoutBom(readFileSync(file, 'utf8')));
     } catch (error) {
         throw new ConfigurationError(`${CONFIG_FILE}: ${describeReadError(error)}`, {
             source: 'config.json',
@@ -419,6 +419,14 @@ function hasApiKey(value: unknown): boolean {
     );
 }
 
+/**
+ * `text` without the byte order mark that Notepad and Windows PowerShell 5.1
+ * put at the start of the UTF-8 they save.
+ */
+export function withoutBom(text: string): string {
+    return text.startsWith('\uFEFF') ? text.slice(1) : text;
+}
+
 // An assignment whose value is only blanks, which `parseEnv` would read as
 // taking the next line for its value: `KEY= ` and the blanks.
 const BLANK_VALUE =
@@ -432,7 +440,7 @@ const BLANK_VALUE =
  * @returns The variables it sets.
  */
 export function readDotenv(text: string): Record<string, string | undefined> {
-    return parseEnv(text.replace(BLANK_VALUE, '$1'));
+    return parseEnv(withoutBom(text).replace(BLANK_VALUE, '$1'));
 }
 
 /** A dotenv file's variables; none if the file does not exist. */

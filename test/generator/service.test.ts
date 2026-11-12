@@ -146,6 +146,45 @@ test('accepts a measured timeout however the LLM writes it', async () => {
     }
 });
 
+test('accepts a statement however the LLM lays it out', async () => {
+    // Wrapped across lines with the trailing comma a formatter adds, or with a
+    // comment after it, it is still the validated statement.
+    const wrapped =
+        'await expect(\n' +
+        "    page.getByRole('heading', { name: 'Login' }),\n" +
+        '  ).toBeVisible({ timeout: 18_000 }); // the login section';
+    const reply = script('en-US', steps(wrapped));
+
+    expect(await new Generator(new MockProvider(reply)).run(TEST_CASE)).toBe(reply);
+});
+
+test('finds the timeout in the matcher options, not in a string', async () => {
+    const code =
+        "await page.getByText('Pay now, timeout: 30 min').click({ force: true });";
+    const timed = testCase(['Pay', [{ ...statement(code), timeout: 18_000 }]]);
+    const reply = script(
+        'en-US',
+        `  // Pay\n  ${code.replace('true }', 'true, timeout: 18_000 }')}\n`,
+    );
+
+    expect(await new Generator(new MockProvider(reply)).run(timed)).toBe(reply);
+});
+
+test('a rejected script is written again once, told why', async () => {
+    // The run that produced the statements is too costly to lose to one slip.
+    const prompts: string[] = [];
+    const replies = [script('en-US', `  ${CONSENT}\n  ${ASSERT_TIMED}\n`), script()];
+    const llm = new MockProvider((_system: string, user: string): string => {
+        prompts.push(user);
+        return replies.shift() ?? '';
+    });
+
+    expect(await new Generator(llm).run(TEST_CASE)).toBe(script());
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('dropped or altered');
+    expect(prompts[1]).toContain(CLICK);
+});
+
 describe('rejects a script that is not exactly what was validated', () => {
     // What was validated, in order, under its locale and with its measured
     // timeouts, is what ships.

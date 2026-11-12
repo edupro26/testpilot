@@ -5,6 +5,9 @@ import path from 'node:path';
 
 import { Command, CommanderError } from 'commander';
 
+import { ERROR_CODES } from '../error-codes.ts';
+import { logger } from '../logger.ts';
+import { errorMessage } from '../runtime/exceptions.ts';
 import {
     configListCommand,
     configSetAzureOpenAICommand,
@@ -173,6 +176,28 @@ export async function runCli(argv: string[]): Promise<number> {
         if (error instanceof CliExit) {
             return error.exitCode;
         }
-        throw error;
+        return reportUncaught(error);
     }
+}
+
+/**
+ * Report a failure no command handled, and return the exit status for it.
+ *
+ * @param error - The failure.
+ * @returns `2` for a file-system or OS failure (a folder that cannot be
+ *     written, a full disk), a setup problem; else that of `INTERNAL_ERROR`.
+ */
+export function reportUncaught(error: unknown): number {
+    if (typeof (error as NodeJS.ErrnoException | null)?.syscall === 'string') {
+        logger.alwaysError(errorMessage(error));
+        logger.alwaysError(
+            'Hint: fix the permissions or free space of the path it names, then ' +
+                'run the command again.',
+        );
+        return 2;
+    }
+    const { exitCode, hint } = ERROR_CODES.INTERNAL_ERROR;
+    logger.alwaysError(`INTERNAL_ERROR: ${errorMessage(error)}`, error);
+    logger.alwaysError(`Hint: ${hint}`);
+    return exitCode;
 }

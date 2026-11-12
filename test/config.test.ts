@@ -176,6 +176,22 @@ test('a variable after one set to blanks is still read', async () => {
     expect(settings.scriptsDir).toBe('e2e');
 });
 
+test('files saved with a byte order mark are read', async () => {
+    // As Notepad and Windows PowerShell 5.1 save UTF-8.
+    const root = await project({
+        config: '\uFEFF{"maxTurns": 9}',
+        env: '\uFEFFTESTPILOT_SCRIPTS_DIR=e2e\n',
+    });
+
+    const settings = loadSettings({}, root);
+
+    expect(settings.mcpMaxTurns).toBe(9);
+    expect(settings.scriptsDir).toBe('e2e');
+    expect(
+        await readConfigObject(path.join(root, '.testpilot', 'config.json')),
+    ).toEqual({ maxTurns: 9 });
+});
+
 test('an invalid variable is a ConfigurationError naming it', async () => {
     const root = await project();
 

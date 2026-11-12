@@ -177,9 +177,10 @@ export function updateDotenv(text: string, values: Record<string, string>): stri
     return `${result}${separator}${missing.map(([, line]) => line).join(eol)}${eol}`;
 }
 
-// The start of an assignment: indent and `export `, the key, and `=` with the
-// blanks around it. A line that starts with `#` is a comment.
-const ASSIGNMENT = /^([ \t]*(?:export[ \t]+)?)([^\s#=][^=\r\n]*?)[ \t]*=[ \t]*/;
+// The start of an assignment: a byte order mark (on the first line), indent and
+// `export `, the key, and `=` with the blanks around it. A line that starts with
+// `#` is a comment.
+const ASSIGNMENT = /^(\uFEFF?[ \t]*(?:export[ \t]+)?)([^\s#=][^=\r\n]*?)[ \t]*=[ \t]*/;
 
 /** One assignment in a dotenv file's text. */
 interface DotenvAssignment {
