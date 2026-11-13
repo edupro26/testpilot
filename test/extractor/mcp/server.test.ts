@@ -50,6 +50,8 @@ test('only the reported Playwright code of a successful call is collected', () =
     expect(new McpResult(false, emitted(fill, CLICK)).code).toEqual([fill, CLICK]);
     expect(new McpResult(false, emitted('// Press Tab', tab)).code).toEqual([tab]);
     expect(new McpResult(true, '### Error\noverlay intercepts').code).toEqual([]);
+    // Playwright MCP reports the code of an action that then timed out.
+    expect(new McpResult(true, emitted(CLICK)).code).toEqual([]);
     expect(new McpResult(false, '### Result\nFound 2 matches').code).toEqual([]);
 });
 
@@ -116,7 +118,9 @@ describe('PlaywrightMCP', () => {
         const result = await mcp.callTool('browser_click', { target: 'e1' });
         expect(result.isError).toBe(false);
         expect(result.code).toEqual([CLICK]);
-        expect((await mcp.callTool('browser_hover', {})).isError).toBe(true);
+        const failed = await mcp.callTool('browser_hover', {});
+        expect(failed.isError).toBe(true);
+        expect(failed.code).toEqual([]);
 
         await expect(mcp.callTool('browser_run_code_unsafe', {})).rejects.toThrow(
             /not allowlisted/,

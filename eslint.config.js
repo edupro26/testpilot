@@ -36,7 +36,9 @@ export default defineConfig(
     {
         languageOptions: {
             parserOptions: {
-                projectService: { allowDefaultProject: ['eslint.config.js'] },
+                projectService: {
+                    allowDefaultProject: ['eslint.config.js', 'src/main.js'],
+                },
                 tsconfigRootDir: import.meta.dirname,
             },
         },
@@ -118,6 +120,11 @@ export default defineConfig(
     {
         files: ['*.config.ts', '*.config.js'],
         rules: { 'jsdoc/require-jsdoc': 'off' },
+    },
+    {
+        // The plain-JavaScript executable runs under Node.
+        files: ['src/main.js'],
+        languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
     },
     prettier,
 );

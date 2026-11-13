@@ -79,7 +79,9 @@ export class McpResult {
      * Comment lines (`// Press Tab`) are narration, not statements.
      */
     get code(): string[] {
-        const match = CODE_BLOCK.exec(this.content);
+        // Playwright MCP reports the code of an action it started, even one that
+        // then failed: a timed-out click still lists its click.
+        const match = this.isError ? null : CODE_BLOCK.exec(this.content);
         if (match?.[1] === undefined) {
             return [];
         }

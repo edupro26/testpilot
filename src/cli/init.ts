@@ -21,7 +21,13 @@ import {
 import { ConfigurationError, errorMessage } from '../runtime/exceptions.ts';
 import { type Check, findPlaywrightConfig, formatChecks, runChecks } from './doctor.ts';
 import { CliExit, fail } from './errors.ts';
-import { installSkill, shownSkillPath, type SkillAgent, skillDir } from './skills.ts';
+import {
+    installSkill,
+    shownSkillPath,
+    type SkillAgent,
+    skillDir,
+    type SkillInstall,
+} from './skills.ts';
 
 /** The check `init` does not stop on: the LLM is configured after `init`. */
 const LLM_CHECK = 'LLM settings';
@@ -188,7 +194,8 @@ export async function initCommand(
 }
 
 /**
- * Install the skill and say where, relative to the project or `~`.
+ * Install the skill and say where, relative to the project or `~`, with a
+ * warning if the replaced copy is still there.
  *
  * @throws {CliExit} With status 2, if the skill folder cannot be replaced.
  */
@@ -198,9 +205,9 @@ async function installSkillLine(
 ): Promise<string> {
     const destination = skillDir(target, places);
     const shown = `${shownSkillPath(target, places)}/`;
-    let status: 'installed' | 'updated';
+    let installed: SkillInstall;
     try {
-        status = await installSkill(destination);
+        installed = await installSkill(destination);
     } catch (error) {
         fail(
             `Cannot install the skill in ${shown}: ${errorMessage(error)}. Check ` +
@@ -209,7 +216,16 @@ async function installSkillLine(
             2,
         );
     }
-    return `${status} ${shown}`;
+    const line = `${installed.status} ${shown}`;
+    if (installed.leftover === undefined) {
+        return line;
+    }
+    // The leftover sits in the agent's folder, above its skills folder.
+    const leftover = path.posix.join(
+        path.posix.dirname(path.posix.dirname(shownSkillPath(target, places))),
+        path.basename(installed.leftover),
+    );
+    return `${line}\n! Could not delete the old copy ${leftover}/; delete it by hand`;
 }
 
 /** Print what init did, after the checks and set apart from them. */

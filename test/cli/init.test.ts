@@ -374,6 +374,28 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     },
 );
 
+test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'an old skill copy that cannot be deleted is a warning, not a failure',
+    async () => {
+        const cwd = await project();
+        await initCommand({ cwd, checks: checks(), skills: 'agents' });
+        const references = path.join(cwd, '.agents/skills/testpilot/references');
+        await chmod(references, 0o555);
+        stdout.mockClear();
+
+        await initCommand({ cwd, checks: checks(), skills: 'agents' });
+        const [leftover] = (await readdir(path.join(cwd, '.agents'))).filter((name) =>
+            name.endsWith('.old'),
+        );
+        await chmod(path.join(cwd, '.agents', leftover!, 'references'), 0o755);
+
+        expect(printed()).toContain('updated .agents/skills/testpilot/');
+        expect(printed()).toContain(
+            `! Could not delete the old copy .agents/${leftover}/; delete it by hand`,
+        );
+    },
+);
+
 test('init --skills -g installs for the user only, outside any project', async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), 'testpilot-'));
     const home = await mkdtemp(path.join(tmpdir(), 'testpilot-home-'));
