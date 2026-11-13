@@ -5,6 +5,18 @@ import jsdoc from 'eslint-plugin-jsdoc';
 import simpleImportSort from 'eslint-plugin-simple-import-sort';
 import tseslint from 'typescript-eslint';
 
+/**
+ * Exported functions and the public methods of exported classes, the API whose
+ * docs must tag every parameter and the return value. Accessors read as
+ * properties and are left out, as are constructors.
+ */
+const PUBLIC_API = [
+    'ExportNamedDeclaration > FunctionDeclaration',
+    'ExportNamedDeclaration > ClassDeclaration > ClassBody > ' +
+        'MethodDefinition[accessibility!="private"][kind="method"]' +
+        '[key.type!="PrivateIdentifier"]',
+];
+
 export default defineConfig(
     {
         ignores: [
@@ -24,7 +36,9 @@ export default defineConfig(
     {
         languageOptions: {
             parserOptions: {
-                projectService: { allowDefaultProject: ['eslint.config.js'] },
+                projectService: {
+                    allowDefaultProject: ['eslint.config.js', 'src/main.js'],
+                },
                 tsconfigRootDir: import.meta.dirname,
             },
         },
@@ -68,8 +82,7 @@ export default defineConfig(
                 'error',
                 { allowNumber: true, allowBoolean: true },
             ],
-            // Doc comments on the exported API, without demanding a
-            // tag for every parameter.
+            // Doc comments on the exported API.
             'jsdoc/require-jsdoc': [
                 'error',
                 {
@@ -82,10 +95,15 @@ export default defineConfig(
                     checkConstructors: false,
                 },
             ],
-            'jsdoc/require-param': 'off',
-            // An options object is documented as one parameter, not field by field.
+            // Parameter and return tags on exported functions and the public
+            // methods of exported classes. An options object is documented as
+            // one parameter, not field by field.
+            'jsdoc/require-param': [
+                'error',
+                { contexts: PUBLIC_API, checkDestructured: false },
+            ],
             'jsdoc/check-param-names': ['error', { checkDestructured: false }],
-            'jsdoc/require-returns': 'off',
+            'jsdoc/require-returns': ['error', { contexts: PUBLIC_API }],
             'jsdoc/require-yields': 'off',
             'jsdoc/require-throws': 'off',
             'jsdoc/tag-lines': ['error', 'any', { startLines: 1 }],
@@ -102,6 +120,11 @@ export default defineConfig(
     {
         files: ['*.config.ts', '*.config.js'],
         rules: { 'jsdoc/require-jsdoc': 'off' },
+    },
+    {
+        // The plain-JavaScript executable runs under Node.
+        files: ['src/main.js'],
+        languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
     },
     prettier,
 );

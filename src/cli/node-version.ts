@@ -1,6 +1,6 @@
 /**
- * The Node.js version testpilot needs. Kept free of syntax that older Node
- * cannot parse, since it is checked before the rest of the CLI loads.
+ * The Node.js version testpilot needs, as `doctor` checks it. The executable,
+ * `src/main.js`, checks it too before the CLI loads.
  */
 
 /** The oldest Node.js major version testpilot runs on. */

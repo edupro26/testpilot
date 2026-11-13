@@ -1,6 +1,6 @@
 {
     "name": "testpilot",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "TestPilot is a GenAI enabler for quick test script generation and automation",
     "private": true,
     "type": "module",
@@ -13,7 +13,7 @@
         "node": ">=24"
     },
     "scripts": {
-        "testpilot": "node src/main.ts",
+        "testpilot": "node src/main.js",
         "lint": "eslint .",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
@@ -48,6 +48,6 @@
         }
     },
     "bin": {
-        "testpilot": "src/main.ts"
+        "testpilot": "src/main.js"
     }
 }

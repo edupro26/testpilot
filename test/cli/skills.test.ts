@@ -56,14 +56,38 @@ test.each([
 
 test('a re-install replaces the copy, dropping files the source lost', async () => {
     const destination = path.join(cwd, '.agents/skills/testpilot');
-    expect(await installSkill(destination, source)).toBe('installed');
+    expect(await installSkill(destination, source)).toEqual({ status: 'installed' });
     await writeFile(path.join(destination, 'stale.md'), 'old');
     await rm(path.join(source, 'references', 'a.md'));
-    expect(await installSkill(destination, source)).toBe('updated');
+    expect(await installSkill(destination, source)).toEqual({ status: 'updated' });
     expect(existsSync(path.join(destination, 'stale.md'))).toBe(false);
     expect(existsSync(path.join(destination, 'references', 'a.md'))).toBe(false);
     expect(existsSync(path.join(destination, 'SKILL.md'))).toBe(true);
 });
+
+test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'an old copy that cannot be deleted is reported, outside the skills folder',
+    async () => {
+        // On Windows a file held open in the old copy does this; the update
+        // itself worked, and an agent must not load the old copy as a skill.
+        const destination = path.join(cwd, '.agents/skills/testpilot');
+        await installSkill(destination, source);
+        await chmod(path.join(destination, 'references'), 0o555);
+        await writeFile(path.join(source, 'SKILL.md'), '# new skill');
+
+        const result = await installSkill(destination, source);
+        const leftover = result.leftover ?? '';
+        await chmod(path.join(leftover, 'references'), 0o755);
+
+        expect(result.status).toBe('updated');
+        expect(path.dirname(leftover)).toBe(path.join(cwd, '.agents'));
+        expect(path.basename(leftover)).toMatch(/^\.testpilot-.*\.old$/);
+        expect(await readdir(path.dirname(destination))).toEqual(['testpilot']);
+        expect(await readFile(path.join(destination, 'SKILL.md'), 'utf8')).toBe(
+            '# new skill',
+        );
+    },
+);
 
 test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'an update that fails to copy keeps the installed copy',
@@ -82,7 +106,7 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
             '# skill',
         );
         expect(existsSync(path.join(destination, 'references', 'a.md'))).toBe(true);
-        expect(await readdir(path.dirname(destination))).toEqual(['testpilot']);
+        expect(await readdir(path.join(cwd, '.agents'))).toEqual(['skills']);
     },
 );
 

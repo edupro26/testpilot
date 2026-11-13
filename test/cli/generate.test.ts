@@ -315,7 +315,7 @@ test('Smoke test', async ({ page }) => {
         expect(await readdir('.testpilot/logs')).toHaveLength(1);
     });
 
-    test('an input named like one being generated is refused while it runs', async () => {
+    test('an input named like one being generated is refused meanwhile', async () => {
         // Both would pass the JSON's check before either wrote it, then share
         // its outputs; the run holding them keeps them until both are written.
         let release = (): void => undefined;
@@ -355,7 +355,10 @@ test('Smoke test', async ({ page }) => {
         await mkdir(tests, { recursive: true });
         const { pid } = spawnSync(process.execPath, ['-e', '']);
         const lock = path.join(tests, 'case.json.lock');
-        await writeFile(lock, JSON.stringify({ pid, source: 'other/case.md' }));
+        await writeFile(
+            lock,
+            JSON.stringify({ pid, source: 'other/case.md', host: hostname() }),
+        );
 
         expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
         expect(existsSync(lock)).toBe(false);
@@ -374,7 +377,10 @@ test('Smoke test', async ({ page }) => {
         const { pid } = spawnSync(process.execPath, ['-e', '']);
         const lock = path.join(tests, 'case.json.lock');
         const guard = `${lock}.takeover`;
-        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
+        await writeFile(
+            lock,
+            JSON.stringify({ pid, source: 'automation/case.md', host: hostname() }),
+        );
         // Another run is taking the lock over.
         await writeFile(guard, '1');
 
@@ -385,7 +391,11 @@ test('Smoke test', async ({ page }) => {
         const won = path.join(tests, 'won.lock');
         await writeFile(
             won,
-            JSON.stringify({ pid: process.ppid, source: 'other/case.md' }),
+            JSON.stringify({
+                pid: process.ppid,
+                source: 'other/case.md',
+                host: hostname(),
+            }),
         );
         await rename(won, lock);
         await unlink(guard);
@@ -407,15 +417,18 @@ test('Smoke test', async ({ page }) => {
         const { pid } = spawnSync(process.execPath, ['-e', '']);
         const lock = path.join(tests, 'case.json.lock');
         const guard = `${lock}.takeover`;
-        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
-        await writeFile(guard, String(pid));
+        await writeFile(
+            lock,
+            JSON.stringify({ pid, source: 'automation/case.md', host: hostname() }),
+        );
+        await writeFile(guard, JSON.stringify({ pid, host: hostname() }));
 
         expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
         expect(existsSync(lock)).toBe(false);
         expect(existsSync(guard)).toBe(false);
     });
 
-    test('a takeover left unwritten is waited for until it is stale, then cleared', async () => {
+    test('an unwritten takeover is waited on until stale, then cleared', async () => {
         // A run killed between creating its guard and writing it leaves an empty
         // one, which is cleared by age; the run must not give up before then.
         const tests = path.join('.testpilot', 'tests');
@@ -423,7 +436,10 @@ test('Smoke test', async ({ page }) => {
         const { pid } = spawnSync(process.execPath, ['-e', '']);
         const lock = path.join(tests, 'case.json.lock');
         const guard = `${lock}.takeover`;
-        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
+        await writeFile(
+            lock,
+            JSON.stringify({ pid, source: 'automation/case.md', host: hostname() }),
+        );
         await writeFile(guard, '');
 
         expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
@@ -439,7 +455,7 @@ test('Smoke test', async ({ page }) => {
         const { pid } = spawnSync(process.execPath, ['-e', '']);
         await writeFile(
             path.join(tests, 'case.json.lock'),
-            JSON.stringify({ pid, source: 'automation/case.md' }),
+            JSON.stringify({ pid, source: 'automation/case.md', host: hostname() }),
         );
 
         expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
@@ -453,8 +469,11 @@ test('Smoke test', async ({ page }) => {
         const { pid } = spawnSync(process.execPath, ['-e', '']);
         const lock = path.join(tests, 'case.json.lock');
         const guard = `${lock}.takeover`;
-        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
-        await writeFile(guard, String(process.ppid));
+        await writeFile(
+            lock,
+            JSON.stringify({ pid, source: 'automation/case.md', host: hostname() }),
+        );
+        await writeFile(guard, JSON.stringify({ pid: process.ppid, host: hostname() }));
         const past = new Date(Date.now() - 60_000);
         await utimes(guard, past, past);
 
@@ -474,8 +493,11 @@ test('Smoke test', async ({ page }) => {
         const { pid } = spawnSync(process.execPath, ['-e', '']);
         const lock = path.join(tests, 'case.json.lock');
         const guard = `${lock}.takeover`;
-        await writeFile(lock, JSON.stringify({ pid, source: 'automation/case.md' }));
-        await writeFile(guard, String(process.ppid));
+        await writeFile(
+            lock,
+            JSON.stringify({ pid, source: 'automation/case.md', host: hostname() }),
+        );
+        await writeFile(guard, JSON.stringify({ pid: process.ppid, host: hostname() }));
 
         const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json']);
 
@@ -530,7 +552,7 @@ test('Smoke test', async ({ page }) => {
         });
     });
 
-    test('a reservation recording this process, which it does not hold, is taken over', async () => {
+    test('a lock naming this process but not held by it is taken over', async () => {
         // In a container every first process is pid 1, so a run killed there
         // leaves a lock that names the next run's own process.
         const tests = path.join('.testpilot', 'tests');
@@ -538,7 +560,11 @@ test('Smoke test', async ({ page }) => {
         const lock = path.join(tests, 'case.json.lock');
         await writeFile(
             lock,
-            JSON.stringify({ pid: process.pid, source: 'automation/case.md' }),
+            JSON.stringify({
+                pid: process.pid,
+                source: 'automation/case.md',
+                host: hostname(),
+            }),
         );
 
         expect((await runPipeline(SMOKE_SCRIPT))[0]).toBe(0);
@@ -552,7 +578,10 @@ test('Smoke test', async ({ page }) => {
             await mkdir(tests, { recursive: true });
             const { pid } = spawnSync(process.execPath, ['-e', '']);
             const lock = path.join(tests, 'case.json.lock');
-            await writeFile(lock, JSON.stringify({ pid, source: 'other/case.md' }));
+            await writeFile(
+                lock,
+                JSON.stringify({ pid, source: 'other/case.md', host: hostname() }),
+            );
             await chmod(tests, 0o555);
             try {
                 const [exitCode] = await runPipeline(SMOKE_SCRIPT, ['--json']);

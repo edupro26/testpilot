@@ -70,6 +70,11 @@ export class OpenAIChatConversation implements Conversation {
      *
      * Nothing is recorded until the request succeeds, so a failed turn can be
      * retried with the same `results`.
+     *
+     * @param results - Outcomes of the previous turn's tool calls; none on the
+     *   opening turn.
+     * @returns The assistant's text, noting a refusal or a cut-off reply, and its
+     *   function calls; no text and no calls if the reply has no message.
      */
     async send(results: ToolResult[] = []): Promise<ToolUseResponse> {
         const replies: ChatCompletionMessageParam[] = results.map((result) => ({

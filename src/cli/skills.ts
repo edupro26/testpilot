@@ -2,9 +2,10 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { cp, readdir, readFile, rename, rm } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
+import { toPosix } from '../config.ts';
 import { errorMessage } from '../runtime/exceptions.ts';
 import type { Check } from './doctor.ts';
 
@@ -57,29 +58,39 @@ export function skillDir(
         : path.join(places.cwd, folder.project, 'testpilot');
 }
 
+/** What {@link installSkill} did. */
+export interface SkillInstall {
+    status: 'installed' | 'updated';
+    /** The replaced copy, if it could not be deleted once the new one was in. */
+    leftover?: string;
+}
+
 /**
  * Copy the skill to `destination`, replacing any copy already there, so files
  * the source no longer has are gone from the copy.
  *
- * The skill is copied beside `destination` first and swapped in once whole, so
- * a copy that fails (a full disk, a file that cannot be read) leaves the
- * installed one as it was.
+ * The skill is copied first and swapped in once whole, so a copy that fails (a
+ * full disk, a file that cannot be read) leaves the installed one as it was.
+ * The copy and the replaced folder are kept in the agent's folder, above its
+ * skills folder, so a leftover is never loaded as a second skill.
  *
  * @param destination - The `testpilot` skill folder to write.
  * @param source - The folder to copy; the bundled skill by default.
- * @returns `'updated'` if there was a copy, else `'installed'`.
+ * @returns Whether there was a copy, and the replaced one if it is still there.
  * @throws {NodeJS.ErrnoException} What kept the skill from being copied or
  *   swapped in.
  */
 export async function installSkill(
     destination: string,
     source: string = SKILL_SOURCE,
-): Promise<'installed' | 'updated'> {
+): Promise<SkillInstall> {
     const existed = existsSync(destination);
-    const copy = `${destination}.${randomUUID()}.new`;
-    const old = `${destination}.${randomUUID()}.old`;
+    const staging = path.dirname(path.dirname(destination));
+    const copy = path.join(staging, `.testpilot-${randomUUID()}.new`);
+    const old = path.join(staging, `.testpilot-${randomUUID()}.old`);
     try {
         await cp(source, copy, { recursive: true });
+        await mkdir(path.dirname(destination), { recursive: true });
         if (existed) {
             await rename(destination, old);
         }
@@ -96,8 +107,14 @@ export async function installSkill(
         await rm(copy, { recursive: true, force: true }).catch(() => undefined);
         throw error;
     }
-    await rm(old, { recursive: true, force: true });
-    return existed ? 'updated' : 'installed';
+    const status = existed ? 'updated' : 'installed';
+    try {
+        await rm(old, { recursive: true, force: true });
+    } catch {
+        // The new copy is in; a file held open (on Windows) only delays the cleanup.
+        return { status, leftover: old };
+    }
+    return { status };
 }
 
 /**
@@ -221,9 +238,4 @@ async function skillFiles(folder: string): Promise<string[]> {
             toPosix(path.relative(folder, path.join(entry.parentPath, entry.name))),
         )
         .sort();
-}
-
-/** A path with `/` separators, as shown to the user. */
-function toPosix(file: string): string {
-    return file.split(path.sep).join('/');
 }

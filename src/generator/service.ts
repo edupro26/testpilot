@@ -7,7 +7,7 @@
  * each late assertion's measured timeout into its matcher's options.
  */
 
-import type { LLMProvider } from '../llm/protocol.ts';
+import { type LLMProvider, SYSTEM_PROMPT } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
 import { statement, type StepStatement, type TestCase } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
@@ -20,8 +20,6 @@ import {
     syntaxDiagnostics,
     timeoutSetting,
 } from './utils.ts';
-
-const SYSTEM_PROMPT = 'You are an expert QA automation engineer.';
 
 // Scripts the LLM may write before the run fails: a rejected one is written
 // again, told why, rather than losing the run that validated its statements.
@@ -60,7 +58,8 @@ export class Generator {
         const statements = steps.flatMap((step) => step.statements);
         if (statements.length === 0) {
             throw new GeneratorError(
-                `${JSON.stringify(testCase.name)} has no validated statements to assemble`,
+                `${JSON.stringify(testCase.name)} has no validated statements ` +
+                    'to assemble',
                 { code: 'NO_STATEMENTS' },
             );
         }

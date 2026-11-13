@@ -23,7 +23,7 @@ src/
 ├── config.ts                       # Settings (zod) + configureLogging
 ├── error-codes.ts                  # ERROR_CODES: stable error codes, exit codes, hints
 ├── logger.ts                       # levelled, coloured stderr logger; also appends to the run's log file
-├── main.ts                         # the testpilot executable: runs the CLI
+├── main.js                         # the testpilot executable: checks Node, runs the CLI
 └── prompt-loader.ts                # loadPrompt / renderPrompt
 test/                               # Vitest suite mirroring src/
 playwright.config.ts                # runs the generated specs in output/testpilot/

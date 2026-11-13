@@ -65,6 +65,8 @@ export class AzureOpenAIProvider implements LLMProvider {
     /**
      * Return the model's completion for the given prompt pair.
      *
+     * @param request - The system and user prompts, and whether to ask for JSON.
+     * @returns The reply's text; empty if it has none.
      * @throws {PipelineError} With code LLM_RESPONSE_INVALID, if the model
      *   refused, or the reply was filtered or cut off: what came back is not
      *   the answer asked for.
@@ -99,7 +101,12 @@ export class AzureOpenAIProvider implements LLMProvider {
         return choice?.message.content ?? '';
     }
 
-    /** Open a tool-calling conversation against Azure OpenAI. */
+    /**
+     * Open a tool-calling conversation against Azure OpenAI.
+     *
+     * @param request - The opening prompts and the tools to bind.
+     * @returns A conversation ready for its first `send()`.
+     */
     startConversation(request: ConversationRequest): OpenAIChatConversation {
         logger.info(
             `Starting Azure OpenAI tool conversation (model=${this.model}, ` +

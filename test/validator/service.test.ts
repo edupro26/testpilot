@@ -113,7 +113,7 @@ test('assigns measured timeouts to late assertions only', async () => {
     ]);
 });
 
-test('a failure names its step and the statements of that step that ran first', async () => {
+test("a failure names its step and the step's statements that ran first", async () => {
     // Positions in the whole script map back to steps past an empty step;
     // what ran before the failure is still measured.
     const late = statement("await expect(page.getByText('Morada')).toBeVisible();");

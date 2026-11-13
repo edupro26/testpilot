@@ -14,7 +14,10 @@ import {
  * @returns The tool result's text content.
  */
 export function emitted(...lines: string[]): string {
-    return `### Ran Playwright code\n\`\`\`js\n${lines.join('\n')}\n\`\`\`\n### Page\n- Page URL: /`;
+    return (
+        `### Ran Playwright code\n\`\`\`js\n${lines.join('\n')}\n\`\`\`\n` +
+        '### Page\n- Page URL: /'
+    );
 }
 
 /** Stands in for `PlaywrightMCP`, replaying scripted tool results. */
@@ -32,7 +35,11 @@ export class FakeMCP implements McpConnection {
         this.results = results;
     }
 
-    /** Return a stub definition for every allowlisted tool. */
+    /**
+     * Return a stub definition for every allowlisted tool.
+     *
+     * @returns One definition per tool in `ALLOWED_TOOLS`, with an empty schema.
+     */
     listTools(): McpTool[] {
         return ALLOWED_TOOLS.map((name) => ({
             name,
@@ -41,7 +48,13 @@ export class FakeMCP implements McpConnection {
         }));
     }
 
-    /** Record the call and return its scripted result. */
+    /**
+     * Record the call and return its scripted result.
+     *
+     * @param name - The tool to call.
+     * @param args - The call's arguments.
+     * @returns The result scripted for `name`; an empty success if none is.
+     */
     async callTool(name: string, args: Record<string, unknown>): Promise<McpResult> {
         this.calls.push([name, args]);
         return this.results[name] ?? new McpResult(false, '### Result\nDone');

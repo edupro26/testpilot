@@ -103,6 +103,7 @@ export class RetryingLLMProvider implements LLMProvider {
     /**
      * Delegate to `provider.complete`, retrying on transient errors.
      *
+     * @param request - The completion request, passed through unchanged.
      * @returns The completion text from `provider`.
      * @throws {Error} Whatever `provider.complete` throws, after retries are exhausted
      *   or immediately for an error that is not transient.
@@ -114,6 +115,7 @@ export class RetryingLLMProvider implements LLMProvider {
     /**
      * Start a conversation whose every turn is retry-protected.
      *
+     * @param request - The opening prompts and tools, passed through unchanged.
      * @returns The provider's conversation, wrapped for retries.
      */
     startConversation(request: ConversationRequest): RetryingConversation {
@@ -169,7 +171,14 @@ export class RetryingConversation implements Conversation {
         this.retry = retry;
     }
 
-    /** Delegate to `conversation.send`, retrying on transient errors. */
+    /**
+     * Delegate to `conversation.send`, retrying on transient errors.
+     *
+     * @param results - The tool results, passed through unchanged.
+     * @returns The wrapped conversation's next turn.
+     * @throws {Error} Whatever `conversation.send` throws, after retries are
+     *   exhausted or immediately for an error that is not transient.
+     */
     send(results?: ToolResult[]): Promise<ToolUseResponse> {
         return this.retry(() => this.conversation.send(results));
     }

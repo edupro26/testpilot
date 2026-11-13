@@ -5,8 +5,6 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { chromium } from '@playwright/test';
-
 import { findProjectRoot, loadSettings } from '../config.ts';
 import { getLlmProvider } from '../llm/factory.ts';
 import {
@@ -14,6 +12,7 @@ import {
     ConfigurationError,
     errorMessage,
 } from '../runtime/exceptions.ts';
+import { launchChromium as launchPipelineChromium } from '../validator/browser.ts';
 import { CliExit } from './errors.ts';
 import { MIN_NODE_MAJOR, unsupportedNode } from './node-version.ts';
 import { checkSkills } from './skills.ts';
@@ -203,6 +202,8 @@ function llmSettingsFix(error: ConfigurationError): string {
 /**
  * Compare two `major.minor.patch` versions numerically.
  *
+ * @param a - The first version.
+ * @param b - The version to compare it with.
  * @returns Negative if `a` is older, positive if newer, zero if equal; a
  *   prerelease suffix is ignored.
  */
@@ -286,7 +287,7 @@ export async function doctorCommand(): Promise<void> {
 
 /** Launch and close testpilot's own Chromium, as the pipeline launches it. */
 async function launchOwnChromium(): Promise<void> {
-    const browser = await chromium.launch();
+    const browser = await launchPipelineChromium(true);
     await browser.close();
 }
 

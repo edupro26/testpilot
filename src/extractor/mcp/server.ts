@@ -13,7 +13,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createConnection } from '@playwright/mcp';
 import type { BrowserContext, Page } from '@playwright/test';
 
-import { CONFIG_DIR, findProjectRoot } from '../../config.ts';
+import { CONFIG_DIR, findProjectRoot, VERSION } from '../../config.ts';
 import { logger } from '../../logger.ts';
 import type { StepStatement } from '../../model/test-case.ts';
 import { errorMessage, McpError } from '../../runtime/exceptions.ts';
@@ -79,7 +79,9 @@ export class McpResult {
      * Comment lines (`// Press Tab`) are narration, not statements.
      */
     get code(): string[] {
-        const match = CODE_BLOCK.exec(this.content);
+        // Playwright MCP reports the code of an action it started, even one that
+        // then failed: a timed-out click still lists its click.
+        const match = this.isError ? null : CODE_BLOCK.exec(this.content);
         if (match?.[1] === undefined) {
             return [];
         }
@@ -206,7 +208,11 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
         return new PlaywrightMCP(createServer, session, tools);
     }
 
-    /** Return the allowlisted tools, resolved at connection time. */
+    /**
+     * Return the allowlisted tools, resolved at connection time.
+     *
+     * @returns The tools, in allowlist order.
+     */
     listTools(): McpTool[] {
         return this.tools;
     }
@@ -289,6 +295,8 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
      * The agent's page: the tab Playwright MCP has selected, opened if there
      * is none. A popup is a newer page, but not the agent's until it selects it.
      *
+     * @returns The selected tab's page; the newest page, or a new one, if no tab
+     *   is marked selected.
      * @throws {McpError} If the session's server exposes no browser context.
      */
     async page(): Promise<Page> {
@@ -317,6 +325,7 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
      * Run accepted statements on the agent's page, as the replay does, to
      * restore the state a step starts from.
      *
+     * @param statements - The statements to run, in order.
      * @returns How long each statement took, in ms.
      * @throws {BrowserError} If a statement fails on the page.
      */
@@ -355,7 +364,7 @@ async function openSession(createServer: ServerFactory): Promise<Session> {
         const server = await createServer();
         const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
         session = {
-            client: new Client({ name: 'testpilot', version: '0.1.0' }),
+            client: new Client({ name: 'testpilot', version: VERSION }),
             server,
         };
         await server.connect(serverTransport);
@@ -413,8 +422,9 @@ async function resolveTools(client: Client): Promise<McpTool[]> {
     if (missing.length > 0) {
         throw new McpError(
             `Playwright MCP is missing expected tool(s): ${missing.join(', ')}. ` +
-                `Was the installed @playwright/mcp upgraded, or the testing capability ` +
-                `dropped from its config? It offered: ${[...offered.keys()].sort().join(', ')}`,
+                'Was the installed @playwright/mcp upgraded, or the testing ' +
+                'capability dropped from its config? It offered: ' +
+                [...offered.keys()].sort().join(', '),
             { code: 'BROWSER_AGENT_FAILED' },
         );
     }

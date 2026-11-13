@@ -20,11 +20,29 @@ export const LLM_PROVIDER_NAMES = ['azure_openai'] as const;
 /** One of `LLM_PROVIDER_NAMES`. */
 export type LLMProviderName = (typeof LLM_PROVIDER_NAMES)[number];
 
+/** The version in testpilot's own `package.json`. */
+export const VERSION = (
+    JSON.parse(
+        readFileSync(path.resolve(import.meta.dirname, '..', 'package.json'), 'utf8'),
+    ) as { version: string }
+).version;
+
 /** The project folder testpilot keeps its files in. */
 export const CONFIG_DIR = '.testpilot';
 
 /** The project's settings file, relative to the project root. */
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+
+/**
+ * A path with `/` separators, as shown to the user and recorded in files that
+ * are shared across platforms.
+ *
+ * @param file - A path with the platform's separators.
+ * @returns The same path with `/` separators.
+ */
+export function toPosix(file: string): string {
+    return file.split(path.sep).join(path.posix.sep);
+}
 
 /** The environment variable that holds the API key, which `config.json` never does. */
 export const API_KEY_VARIABLE = 'TESTPILOT_AZURE_OPENAI_API_KEY';
@@ -89,20 +107,6 @@ const SettingsSchema = z.object({
     TESTPILOT_LOG_LEVEL: LogLevelSchema.default('INFO'),
 });
 
-/** Typed application settings, from the project's config file and environment. */
-export interface Settings {
-    llmProvider: LLMProviderName;
-    azureOpenaiEndpoint: string | undefined;
-    azureOpenaiApiKey: string | undefined;
-    azureDeploymentName: string | undefined;
-    azureModelName: string | undefined;
-    openaiApiVersion: string | undefined;
-    scriptsDir: string;
-    browserLocale: string;
-    mcpMaxTurns: number;
-    logLevel: LogLevel;
-}
-
 /** The name of a setting's `TESTPILOT_` environment variable. */
 export type SettingVariable = keyof typeof SettingsSchema.shape;
 
@@ -118,15 +122,18 @@ export interface SettingSpec {
     variable: SettingVariable;
     /** The dotted `config.json` path, e.g. `azureOpenAI.endpoint`; none for the key. */
     configKey: string | undefined;
-    field: keyof Settings;
+    field: string;
     /** Whether the value must never be shown; only the API key. */
     secret: boolean;
     /** The `generate` flag that overrides it for a run; none for most settings. */
     flag: string | undefined;
 }
 
-/** Every setting, in the order the documentation lists them. */
-export const SETTINGS: readonly SettingSpec[] = [
+/**
+ * Every setting, in the order the documentation lists them. The `Settings`
+ * fields, and how `config.json` keys map to variables, are derived from it.
+ */
+export const SETTINGS = [
     {
         variable: 'TESTPILOT_LLM_PROVIDER',
         configKey: 'llmProvider',
@@ -197,7 +204,14 @@ export const SETTINGS: readonly SettingSpec[] = [
         secret: false,
         flag: '--log-level',
     },
-];
+] as const satisfies readonly SettingSpec[];
+
+/** Typed application settings, from the project's config file and environment. */
+export type Settings = {
+    [Spec in (typeof SETTINGS)[number] as Spec['field']]: z.output<
+        typeof SettingsSchema
+    >[Spec['variable']];
+};
 
 /** Settings together with the source each value came from. */
 export interface LoadedSettings {
@@ -300,24 +314,14 @@ export function resolveSettings(
             source: issues[0]?.source,
         });
     }
-    const data = parsed.data;
-    const settings: Settings = {
-        llmProvider: data.TESTPILOT_LLM_PROVIDER,
-        azureOpenaiEndpoint: data.TESTPILOT_AZURE_OPENAI_ENDPOINT,
-        azureOpenaiApiKey: data.TESTPILOT_AZURE_OPENAI_API_KEY,
-        azureDeploymentName: data.TESTPILOT_AZURE_DEPLOYMENT_NAME,
-        azureModelName: data.TESTPILOT_AZURE_MODEL_NAME,
-        openaiApiVersion: data.TESTPILOT_OPENAI_API_VERSION,
-        scriptsDir: data.TESTPILOT_SCRIPTS_DIR,
-        browserLocale: data.TESTPILOT_LOCALE,
-        mcpMaxTurns: data.TESTPILOT_MAX_TURNS,
-        logLevel: data.TESTPILOT_LOG_LEVEL,
-    };
+    const settings = Object.fromEntries(
+        SETTINGS.map(({ variable, field }) => [field, parsed.data[variable]]),
+    ) as Settings;
     const sources: LoadedSettings['sources'] = {};
-    for (const { variable, field } of SETTINGS) {
+    for (const { variable } of SETTINGS) {
         const source =
             origins[variable] ??
-            (settings[field] === undefined ? undefined : 'default');
+            (parsed.data[variable] === undefined ? undefined : 'default');
         if (source !== undefined) {
             sources[variable] = source;
         }
@@ -391,23 +395,26 @@ function readConfigFile(file: string): Record<string, string> {
             },
         );
     }
-    const config = parsed.data;
-    const variables = {
-        TESTPILOT_LLM_PROVIDER: config.llmProvider,
-        TESTPILOT_AZURE_OPENAI_ENDPOINT: config.azureOpenAI?.endpoint,
-        TESTPILOT_AZURE_MODEL_NAME: config.azureOpenAI?.modelName,
-        TESTPILOT_AZURE_DEPLOYMENT_NAME: config.azureOpenAI?.deploymentName,
-        TESTPILOT_OPENAI_API_VERSION: config.azureOpenAI?.apiVersion,
-        TESTPILOT_SCRIPTS_DIR: config.scriptsDir,
-        TESTPILOT_MAX_TURNS: config.maxTurns?.toString(),
-        TESTPILOT_LOCALE: config.locale,
-        TESTPILOT_LOG_LEVEL: config.logLevel,
-    };
     return Object.fromEntries(
-        Object.entries(variables).filter(
-            (entry): entry is [string, string] => entry[1] !== undefined,
-        ),
+        SETTINGS.flatMap(({ variable, configKey }) => {
+            const value =
+                configKey === undefined ? undefined : valueAt(parsed.data, configKey);
+            // Every value in the file is a string or, for `maxTurns`, a number.
+            return typeof value === 'string' || typeof value === 'number'
+                ? [[variable, String(value)]]
+                : [];
+        }),
     );
+}
+
+/** The value at a dotted path, e.g. `azureOpenAI.endpoint`, in `object`. */
+function valueAt(object: object, dotted: string): unknown {
+    return dotted
+        .split('.')
+        .reduce<unknown>(
+            (value, key) => (value as Record<string, unknown> | undefined)?.[key],
+            object,
+        );
 }
 
 /** Whether `value` holds a key named like an API key, at any depth. */
@@ -423,6 +430,9 @@ function hasApiKey(value: unknown): boolean {
 /**
  * `text` without the byte order mark that Notepad and Windows PowerShell 5.1
  * put at the start of the UTF-8 they save.
+ *
+ * @param text - A file's content.
+ * @returns `text` with a leading byte order mark removed; unchanged otherwise.
  */
 export function withoutBom(text: string): string {
     return text.startsWith('\uFEFF') ? text.slice(1) : text;

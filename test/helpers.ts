@@ -69,7 +69,11 @@ function printed(calls: unknown[][], separator: string): string {
     return calls.map(([chunk]) => String(chunk)).join(separator);
 }
 
-/** Everything written to standard output since the test began. */
+/**
+ * Everything written to standard output since the test began.
+ *
+ * @returns The written chunks, joined as written.
+ */
 export function stdout(): string {
     return printed(stdoutSpy?.mock.calls ?? [], '');
 }
@@ -77,6 +81,8 @@ export function stdout(): string {
 /**
  * Everything written to standard error since the test began: each
  * `console.error` call ends its line, as it does on a terminal.
+ *
+ * @returns The logged lines, then the chunks written directly.
  */
 export function stderr(): string {
     const [logged, written] = stderrSpies;

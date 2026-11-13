@@ -14,6 +14,9 @@ const TIMEOUT_MARGIN = 2;
 /**
  * Pins the locale these locators were validated under, quoted the way
  * Playwright's codegen quotes the statements.
+ *
+ * @param locale - The browser locale the statements were validated under.
+ * @returns The `test.use({ locale })` line for the script.
  */
 export function localeSetting(locale: string): string {
     return `test.use({ locale: '${locale}' });`;
@@ -34,7 +37,13 @@ export function timeoutSetting(runTimeMs: number): string | undefined {
     return `test.setTimeout(${seconds}_000);`;
 }
 
-/** The prompt's step blocks: each step's text, then its statements. */
+/**
+ * The prompt's step blocks: each step's text, then its statements.
+ *
+ * @param steps - The validated steps, in order.
+ * @returns One `STEP:` block per step, separated by blank lines; a step with
+ *   no statements says so.
+ */
 export function describeSteps(steps: ExecutionStep[]): string {
     return steps
         .map((step) =>
@@ -48,7 +57,12 @@ export function describeSteps(steps: ExecutionStep[]): string {
         .join('\n\n');
 }
 
-/** Remove a surrounding Markdown code fence, if the LLM added one. */
+/**
+ * Remove a surrounding Markdown code fence, if the LLM added one.
+ *
+ * @param text - The LLM's reply.
+ * @returns The lines inside the fence; `text` unchanged if it has none.
+ */
 export function stripFence(text: string): string {
     const lines = text.trim().split('\n');
     if (
@@ -61,7 +75,13 @@ export function stripFence(text: string): string {
     return text;
 }
 
-/** The syntax errors in `script`, as `line:column message` strings. */
+/**
+ * The syntax errors in `script`, as `line:column message` strings.
+ *
+ * @param script - The generated TypeScript test.
+ * @returns One string per error, 1-based; empty if the script parses. An
+ *   error with no position is its message alone.
+ */
 export function syntaxDiagnostics(script: string): string[] {
     const { diagnostics = [] } = ts.transpileModule(script, {
         fileName: 'generated.spec.ts',
@@ -89,6 +109,11 @@ export function syntaxDiagnostics(script: string): string[] {
  *
  * Statements are compared token by token, so how the LLM lays one out (wrapped
  * across lines, with a comment, or with a formatter's trailing comma) is its own.
+ *
+ * @param script - The generated TypeScript test.
+ * @param required - The validated statements, in order; blank ones are skipped.
+ * @returns Each statement not found after the previous one found, with its
+ *   timeout as the prompt showed it; empty if all are written.
  */
 export function missingStatements(script: string, required: StepStatement[]): string[] {
     const written = scriptStatements(script);

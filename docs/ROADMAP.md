@@ -60,7 +60,7 @@ Every other setting keeps its default until it is set, and the Azure block comes
     tests/                      # the validated JSON test case of each run
 ```
 
-Without a string-literal `testDir` in the Playwright config, `scriptsDir` falls back to `testpilot` (Playwright's default `testDir` is the config's own folder), with a warning when `testDir` is set some other way.
+`init` asks the project's Playwright for the resolved `testDir` of each project (`playwright test --list --reporter=json` on a spec that does not exist, so no spec is loaded). When the projects use different folders, `scriptsDir` goes inside the config's own `testDir`; when Playwright cannot load the config, it falls back to `testpilot`. Both print a warning.
 
 Re-running `init` is safe: it never overwrites an existing file, and only adds `scriptsDir` to a `config.json` that lacks it; a `config.json` that is not a valid JSON object is left untouched for the developer to fix. That is also how `init --skills` adds or updates the skill in a project already set up; the skill folder is the one exception to never overwriting: `init --skills` replaces it whole, hand edits included.
 
@@ -107,7 +107,7 @@ Out of scope for now: publishing testpilot to a package registry. That needs a b
 
 ### B. CLI commands (done)
 
-`src/main.ts` is the thin entrypoint, `src/cli/` holds the commander program (`cli.ts`) plus one file per command (`generate.ts`, `doctor.ts`, `init.ts`, `config.ts`) and the shared exit handling (`errors.ts`), and `src/runtime/` holds the pipeline (`pipeline.ts`) and its errors (`exceptions.ts`). New commands are registered in `buildProgram()` in `src/cli/cli.ts`. `testpilot config` has only the `list` and `set-azure-openai` subcommands; other settings are edited by hand in `config.json`.
+`src/main.js` is the thin entrypoint (plain JavaScript, so it can tell older Node.js why testpilot does not run), `src/cli/` holds the commander program (`cli.ts`) plus one file per command (`generate.ts`, `doctor.ts`, `init.ts`, `config.ts`) and the shared exit handling (`errors.ts`), and `src/runtime/` holds the pipeline (`pipeline.ts`) and its errors (`exceptions.ts`). New commands are registered in `buildProgram()` in `src/cli/cli.ts`. `testpilot config` has only the `list` and `set-azure-openai` subcommands; other settings are edited by hand in `config.json`.
 
 | Command | What it does | Status |
 |---|---|---|
@@ -219,7 +219,7 @@ skills/testpilot/
 |---|---|---|
 | 1 | Test execution + reporting | `testpilot run`: run the generated scripts with the project's own Playwright and produce a test report, with options mirroring the main `npx playwright test` flags (e.g. `--headed`, `--project`, `--reporter`). |
 | 2 | Input variables | Let a test case reference variables (e.g. login credentials) by name instead of writing values into the steps. Values are supplied at invocation time and the generated script reads them rather than hard-coding them. |
-| 3 | Retry extraction failures | Retry a step when the Extractor fails: an `ExtractorError` such as running out of turns currently aborts the run, while validation failures already re-extract the failing step within a run-wide `MAX_RETRIES` of 5. Count Extractor retries against the same budget, and make that budget configurable rather than a constant. |
+| 3 | Retry extraction failures | Retry a step whose agent gives up (`STEP_ABANDONED`) or runs out of turns (`STEP_OUT_OF_TURNS`), which now ends the run. Spend the same `MAX_RETRIES` (5) that validation failures do, and make it configurable. An unparsable statement stays fatal. |
 | 4 | Pre-conditions | Let a test case declare the state it starts from (e.g. a logged-in user, an item in the cart), and define how that state is established before the steps run. |
 | 5 | Multiple markdown inputs | Accept several `.md` files in one invocation, producing one test script per input or a single bundled script. |
 | 6 | Generic prompt input | Accept a free-form user prompt instead of a structured markdown test case; the agent analyses it and builds the structured test case itself. |

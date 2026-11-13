@@ -36,7 +36,7 @@
       "Bash(npm install *)",
       "Bash(npm uninstall *)",
       "Bash(npm update *)",
-      "Bash(node src/main.ts *)",
+      "Bash(node src/main.js *)",
       "Bash(npm run testpilot *)",
       "Bash(testpilot *)",
       "Bash(git reset *)",

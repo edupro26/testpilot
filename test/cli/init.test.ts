@@ -1,14 +1,22 @@
 /** Tests for the init command: setting a project up for testpilot. */
 
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import {
+    chmod,
+    mkdir,
+    mkdtemp,
+    readdir,
+    readFile,
+    symlink,
+    writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { beforeEach, expect, type MockInstance, test, vi } from 'vitest';
 
 import type { Check } from '../../src/cli/doctor.ts';
-import { initCommand, readTestDirs } from '../../src/cli/init.ts';
+import { initCommand, readTestDirs, type TestDirs } from '../../src/cli/init.ts';
 import { checkSkills } from '../../src/cli/skills.ts';
 import { loadSettings } from '../../src/config.ts';
 
@@ -32,12 +40,22 @@ function checks(...failing: string[]): () => Promise<Check[]> {
         );
 }
 
-/** A project whose Playwright config holds `configText`. */
+/** testpilot's own packages, which a test project borrows its Playwright from. */
+const NODE_MODULES = path.resolve(import.meta.dirname, '../../node_modules');
+
+/**
+ * A project whose Playwright config holds `configText`, with Playwright
+ * installed unless `playwright` is false.
+ */
 async function project(
     configText = "export default { testDir: './e2e' };",
+    { playwright = true } = {},
 ): Promise<string> {
     const cwd = await mkdtemp(path.join(tmpdir(), 'testpilot-'));
     await writeFile(path.join(cwd, 'playwright.config.ts'), configText);
+    if (playwright) {
+        await symlink(NODE_MODULES, path.join(cwd, 'node_modules'), 'junction');
+    }
     return cwd;
 }
 
@@ -59,65 +77,62 @@ beforeEach(() => {
     };
 });
 
-/** The top-level `testDir` read from a config exporting `{ <properties> }`. */
-function topTestDir(properties: string): string | null | undefined {
-    return readTestDirs(`export default defineConfig({ ${properties} });`).testDir;
+/** The folders Playwright resolves for a config holding `configText`. */
+async function testDirs(configText: string): Promise<{ cwd: string; dirs: TestDirs }> {
+    const cwd = await project(configText);
+    return {
+        cwd,
+        dirs: await readTestDirs(cwd, path.join(cwd, 'playwright.config.ts')),
+    };
 }
 
-test('readTestDirs reads a literal and nothing else', () => {
-    expect(topTestDir("testDir: './tests',")).toBe('./tests');
-    expect(topTestDir('testDir: "e2e"')).toBe('e2e');
-    expect(topTestDir('testDir: `specs`')).toBe('specs');
-    expect(topTestDir('')).toBeUndefined();
-    expect(topTestDir("testDir: path.join(__dirname, 'e2e')")).toBeNull();
-    expect(topTestDir('testDir: `${root}/e2e`')).toBeNull();
-    expect(topTestDir("testDir: './e2e' + '/smoke',")).toBeNull();
-    expect(topTestDir("testDir: 'e2e'.concat('/smoke')")).toBeNull();
-    expect(topTestDir("testDir: 'e2e' // the specs\n,")).toBe('e2e');
-});
-
-test('readTestDirs skips comments but not URLs', () => {
-    expect(topTestDir("// testDir: './old',\ntestDir: './e2e'")).toBe('./e2e');
-    expect(topTestDir("/* testDir: 'x' */ testDir: 'y'")).toBe('y');
-    expect(topTestDir("use: { baseURL: 'http://a' }, testDir: 'z'")).toBe('z');
-});
-
-test('readTestDirs finds the config however it is exported', () => {
+test('readTestDirs resolves testDir however the config sets it', async () => {
     for (const configText of [
-        "export default { testDir: 'e2e' };",
-        "export default { testDir: 'e2e' } satisfies PlaywrightTestConfig;",
-        "const config = { testDir: 'e2e' };\nexport default config;",
-        "module.exports = defineConfig({ testDir: 'e2e' });",
+        "export default { testDir: './e2e' };",
+        "import path from 'node:path';\n" +
+            "export default { testDir: path.join(__dirname, 'e2e') };",
         "import { defineConfig as config } from '@playwright/test';\n" +
             "export default config({ testDir: 'e2e' });",
-        "import * as pw from '@playwright/test';\n" +
-            "export default pw.defineConfig({ testDir: 'e2e' });",
-        "const { defineConfig: config } = require('@playwright/test');\n" +
-            "module.exports = config({ testDir: 'e2e' });",
+        "const dir = 'e2e';\nmodule.exports = { testDir: `./${dir}` };",
+        // A config that prints, as dotenv does, leaves the report readable.
+        "console.log('[dotenv] injecting env');\nexport default { testDir: 'e2e' };",
     ]) {
-        expect(readTestDirs(configText).testDir).toBe('e2e');
+        const { cwd, dirs } = await testDirs(configText);
+        expect(dirs).toEqual({
+            rootDir: path.join(cwd, 'e2e'),
+            projects: [path.join(cwd, 'e2e')],
+        });
     }
-});
+}, 30_000);
 
-test('readTestDirs says it cannot read a config it cannot find', () => {
-    for (const configText of [
-        "export default makeConfig({ testDir: 'e2e' });",
-        "export default defineConfig(base, { testDir: 'e2e' });",
-        "export default require('./shared.config');",
-    ]) {
-        expect(readTestDirs(configText)).toEqual({ testDir: null, projects: [] });
-    }
-});
-
-test("readTestDirs keeps a project's testDir apart from the top-level one", () => {
-    const dirs = readTestDirs(
-        'export default defineConfig({\n' +
+test("readTestDirs keeps each project's testDir apart from the config's", async () => {
+    const { cwd, dirs } = await testDirs(
+        'export default {\n' +
             "  projects: [{ name: 'api', testDir: './api' }, { name: 'chromium' }],\n" +
             "  testDir: './e2e',\n" +
-            '});',
+            '};',
     );
 
-    expect(dirs).toEqual({ testDir: './e2e', projects: ['./api', undefined] });
+    expect(dirs).toEqual({
+        rootDir: path.join(cwd, 'e2e'),
+        projects: [path.join(cwd, 'api'), path.join(cwd, 'e2e')],
+    });
+});
+
+test('readTestDirs fails with the reason Playwright gives', async () => {
+    const cwd = await project("throw new Error('BASE_URL is not set');");
+
+    await expect(
+        readTestDirs(cwd, path.join(cwd, 'playwright.config.ts')),
+    ).rejects.toThrow('Error: BASE_URL is not set');
+});
+
+test('readTestDirs fails without Playwright installed', async () => {
+    const cwd = await project(undefined, { playwright: false });
+
+    await expect(
+        readTestDirs(cwd, path.join(cwd, 'playwright.config.ts')),
+    ).rejects.toThrow('@playwright/test is not installed in this project');
 });
 
 test('init writes the scripts folder and the .gitignore, nothing else', async () => {
@@ -222,40 +237,7 @@ test('missing LLM settings do not stop init', async () => {
     expect(printed()).not.toContain('Next:');
 });
 
-test('without a literal testDir the scripts go to testpilot/', async () => {
-    const computed = await project(
-        "export default { testDir: path.join(__dirname, 'e2e') };",
-    );
-    await initCommand({ cwd: computed, checks: checks() });
-    expect(JSON.parse(await readConfig(computed))).toEqual({ scriptsDir: 'testpilot' });
-    expect(printed()).toContain('! Could not read testDir from playwright.config.ts');
-
-    stdout.mockClear();
-    const joined = await project("export default { testDir: './e2e' + '/smoke' };");
-    await initCommand({ cwd: joined, checks: checks() });
-    expect(JSON.parse(await readConfig(joined))).toEqual({ scriptsDir: 'testpilot' });
-    expect(printed()).toContain('! Could not read testDir from playwright.config.ts');
-
-    stdout.mockClear();
-    const unset = await project('export default {};');
-    await initCommand({ cwd: unset, checks: checks() });
-    expect(JSON.parse(await readConfig(unset))).toEqual({ scriptsDir: 'testpilot' });
-    expect(printed()).not.toContain('Could not read testDir');
-});
-
-test('an aliased defineConfig is followed to its testDir', async () => {
-    const cwd = await project(
-        "import { defineConfig as config } from '@playwright/test';\n" +
-            "export default config({ testDir: './e2e' });",
-    );
-
-    await initCommand({ cwd, checks: checks() });
-
-    expect(JSON.parse(await readConfig(cwd))).toEqual({ scriptsDir: 'e2e/testpilot' });
-    expect(printed()).not.toContain('Could not read testDir');
-});
-
-test('a config whose object cannot be found is warned about, not taken as unset', async () => {
+test('an unloadable config is warned about; scripts go to testpilot/', async () => {
     const cwd = await project(
         "import { makeConfig } from './shared';\n" +
             "export default makeConfig({ testDir: './e2e' });",
@@ -264,17 +246,43 @@ test('a config whose object cannot be found is warned about, not taken as unset'
     await initCommand({ cwd, checks: checks() });
 
     expect(JSON.parse(await readConfig(cwd))).toEqual({ scriptsDir: 'testpilot' });
-    expect(printed()).toContain('! Could not read testDir from playwright.config.ts');
+    expect(printed()).toMatch(
+        /! Could not read testDir from playwright\.config\.ts: .*shared/,
+    );
+    expect(printed()).toContain('; check scriptsDir in .testpilot/config.json');
+});
+
+test('without a testDir the scripts go to testpilot/, with no warning', async () => {
+    const cwd = await project('export default {};');
+
+    await initCommand({ cwd, checks: checks() });
+
+    expect(JSON.parse(await readConfig(cwd))).toEqual({ scriptsDir: 'testpilot' });
+    expect(printed()).not.toContain('!');
+});
+
+test('a computed testDir is where the scripts go', async () => {
+    const cwd = await project(
+        "import path from 'node:path';\n" +
+            "export default { testDir: path.join(__dirname, 'e2e', 'smoke') };",
+    );
+
+    await initCommand({ cwd, checks: checks() });
+
+    expect(JSON.parse(await readConfig(cwd))).toEqual({
+        scriptsDir: 'e2e/smoke/testpilot',
+    });
+    expect(printed()).not.toContain('!');
 });
 
 test("a project's testDir is not taken for the whole config's", async () => {
     // The API project comes first, but it is not where every project looks:
     // the scripts go to the top-level folder, and init says the projects differ.
     const cwd = await project(
-        'export default defineConfig({\n' +
+        'export default {\n' +
             "  projects: [{ name: 'api', testDir: './api' }, { name: 'chromium' }],\n" +
             "  testDir: './e2e',\n" +
-            '});',
+            '};',
     );
 
     await initCommand({ cwd, checks: checks() });
@@ -288,7 +296,7 @@ test("a project's testDir is not taken for the whole config's", async () => {
 
 test('the folder every project shares is where the scripts go', async () => {
     const cwd = await project(
-        "export default defineConfig({ projects: [{ name: 'ui', testDir: './ui' }] });",
+        "export default { projects: [{ name: 'ui', testDir: './ui' }] };",
     );
 
     await initCommand({ cwd, checks: checks() });
@@ -363,6 +371,28 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
             errors.mockRestore();
             await chmod(skills, 0o755);
         }
+    },
+);
+
+test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'an old skill copy that cannot be deleted is a warning, not a failure',
+    async () => {
+        const cwd = await project();
+        await initCommand({ cwd, checks: checks(), skills: 'agents' });
+        const references = path.join(cwd, '.agents/skills/testpilot/references');
+        await chmod(references, 0o555);
+        stdout.mockClear();
+
+        await initCommand({ cwd, checks: checks(), skills: 'agents' });
+        const [leftover] = (await readdir(path.join(cwd, '.agents'))).filter((name) =>
+            name.endsWith('.old'),
+        );
+        await chmod(path.join(cwd, '.agents', leftover!, 'references'), 0o755);
+
+        expect(printed()).toContain('updated .agents/skills/testpilot/');
+        expect(printed()).toContain(
+            `! Could not delete the old copy .agents/${leftover}/; delete it by hand`,
+        );
     },
 );
 
