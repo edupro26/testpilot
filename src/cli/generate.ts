@@ -14,7 +14,9 @@ import { hostname } from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { CONFIG_DIR, findProjectRoot, type SettingFlags } from '../config.ts';
+import { z } from 'zod';
+
+import { CONFIG_DIR, findProjectRoot, type SettingFlags, toPosix } from '../config.ts';
 import { ERROR_CODES, type ErrorCode } from '../error-codes.ts';
 import { lastLineAt, logger, setLogFile } from '../logger.ts';
 import { errorMessage } from '../runtime/exceptions.ts';
@@ -104,15 +106,14 @@ const HOST = hostname();
 // pid, as each container's first process is.
 const held = new Set<string>();
 
+/** A run as a lock or takeover guard records it: its process and host. */
+const RunSchema = z.object({ pid: z.number().int(), host: z.string() });
+
+/** A run holding a reservation, with the input it is generating. */
+const HolderSchema = RunSchema.extend({ source: z.string() });
+
 /** Who holds a reservation of a test case's outputs, as its lock file records it. */
-interface OutputHolder {
-    /** The holding run's process. */
-    pid: number;
-    /** The input it is generating, as the outputs' JSON records it. */
-    source: string;
-    /** The host it runs on; absent from locks written before hosts were recorded. */
-    host?: string;
-}
+type OutputHolder = z.infer<typeof HolderSchema>;
 
 /**
  * Reserve a test case's outputs for this run, until the reservation is
@@ -147,11 +148,11 @@ async function reserveOutputs(
             held.add(path.resolve(lock));
             return {
                 [Symbol.asyncDispose]: () =>
-                    removeLock(lock)
+                    removeFile(lock)
                         .catch((error: unknown) => {
                             logger.warning(
-                                `Cannot remove ${shown(lock)}; the next run will take ` +
-                                    `it over: ${errorMessage(error)}`,
+                                `Cannot remove ${shown(lock)}; the next run will ` +
+                                    `take it over: ${errorMessage(error)}`,
                             );
                         })
                         .finally(() => held.delete(path.resolve(lock))),
@@ -164,9 +165,7 @@ async function reserveOutputs(
         const other = await lockHolder(lock);
         if (other !== 'stale') {
             const on =
-                other?.host === undefined || other.host === HOST
-                    ? ''
-                    : ` on ${other.host}`;
+                other === undefined || other.host === HOST ? '' : ` on ${other.host}`;
             const by =
                 other === undefined
                     ? 'another run'
@@ -237,7 +236,7 @@ async function takeOver(lock: string): Promise<boolean> {
     held.add(path.resolve(guard));
     try {
         if ((await lockHolder(lock)) === 'stale') {
-            await removeLock(lock);
+            await removeFile(lock);
         }
     } finally {
         held.delete(path.resolve(guard));
@@ -276,7 +275,7 @@ async function createWritten(file: string, text: string): Promise<void> {
         }
         await writeFile(file, text, { flag: 'wx' });
     } finally {
-        await removeLock(draft);
+        await removeFile(draft);
     }
 }
 
@@ -297,11 +296,11 @@ async function clearStaleGuard(guard: string): Promise<boolean> {
     if (judged === undefined) {
         return true;
     }
-    const run = guardRun(judged.text);
+    const run = recorded(judged.text, RunSchema);
     const stale =
         run === undefined
             ? Date.now() - judged.mtimeMs >= LOCK_WRITE_MS
-            : !isHolding(run.pid, guard, run.host);
+            : !isHolding(run, guard);
     if (!stale) {
         return false;
     }
@@ -337,28 +336,16 @@ async function removeIfSame(file: string, judged: FileState): Promise<void> {
         // Another run's: put it back, unless a third run has created one since.
         await link(aside, file).catch(() => undefined);
     }
-    await removeLock(aside);
+    await removeFile(aside);
 }
 
-/**
- * The run a takeover guard records: `{ pid, host, id }`, or a bare pid as guards
- * written before hosts were recorded hold; `undefined` if it is not written yet.
- */
-function guardRun(text: string): { pid: number; host?: string } | undefined {
-    let recorded: unknown;
+/** What a lock or guard's `text` records; `undefined` if it is not written yet. */
+function recorded<T>(text: string, schema: z.ZodType<T>): T | undefined {
     try {
-        recorded = JSON.parse(text);
+        return schema.parse(JSON.parse(text));
     } catch {
         return undefined;
     }
-    if (Number.isInteger(recorded)) {
-        return { pid: recorded as number };
-    }
-    const { pid, host } = (recorded ?? {}) as { pid?: unknown; host?: unknown };
-    if (typeof pid !== 'number' || !Number.isInteger(pid)) {
-        return undefined;
-    }
-    return typeof host === 'string' ? { pid, host } : { pid };
 }
 
 /** A file's text, inode and modification time. */
@@ -385,13 +372,13 @@ async function fileState(file: string): Promise<FileState | undefined> {
 }
 
 /**
- * Delete a lock file; one already gone is not an error.
+ * Delete a file; one already gone is not an error.
  *
- * @throws {NodeJS.ErrnoException} What kept the lock file from being deleted.
+ * @throws {NodeJS.ErrnoException} What kept the file from being deleted.
  */
-async function removeLock(lock: string): Promise<void> {
+async function removeFile(file: string): Promise<void> {
     try {
-        await unlink(lock);
+        await unlink(file);
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
             throw error;
@@ -409,47 +396,30 @@ async function removeLock(lock: string): Promise<void> {
  * @throws {NodeJS.ErrnoException} If the lock exists but cannot be read.
  */
 async function lockHolder(lock: string): Promise<OutputHolder | 'stale' | undefined> {
-    let text: string;
-    let modified: number;
-    try {
-        [text, { mtimeMs: modified }] = await Promise.all([
-            readFile(lock, 'utf8'),
-            stat(lock),
-        ]);
-    } catch (error) {
-        // Gone: its holder released it. Any other failure says nothing of the
-        // holder, so the lock is not taken over.
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            return 'stale';
-        }
-        throw error;
+    // Gone: its holder released it. Any other failure says nothing of the holder,
+    // so the lock is not taken over.
+    const state = await fileState(lock);
+    if (state === undefined) {
+        return 'stale';
     }
-    let recorded: Partial<OutputHolder> = {};
-    try {
-        recorded = JSON.parse(text) as Partial<OutputHolder>;
-    } catch {
+    const holder = recorded(state.text, HolderSchema);
+    if (holder === undefined) {
         // Not written yet, or written in part.
+        return Date.now() - state.mtimeMs < LOCK_WRITE_MS ? undefined : 'stale';
     }
-    if (typeof recorded.pid !== 'number' || typeof recorded.source !== 'string') {
-        return Date.now() - modified < LOCK_WRITE_MS ? undefined : 'stale';
-    }
-    const host = typeof recorded.host === 'string' ? recorded.host : undefined;
-    return isHolding(recorded.pid, lock, host)
-        ? { pid: recorded.pid, source: recorded.source, ...(host && { host }) }
-        : 'stale';
+    return isHolding(holder, lock) ? holder : 'stale';
 }
 
 /**
- * Whether the run recorded in `file`, as process `pid` on `host`, still holds
- * it. This process holds only the files it created; the one that last had its
- * pid may have left others. A run on another host cannot be checked from here,
- * so it is taken to hold the file; a file that records no host is judged here.
+ * Whether `run`, recorded in `file`, still holds it. This process holds only the
+ * files it created; the one that last had its pid may have left others. A run on
+ * another host cannot be checked from here, so it is taken to hold the file.
  */
-function isHolding(pid: number, file: string, host?: string): boolean {
-    if (host !== undefined && host !== HOST) {
+function isHolding(run: z.infer<typeof RunSchema>, file: string): boolean {
+    if (run.host !== HOST) {
         return true;
     }
-    return pid === process.pid ? held.has(path.resolve(file)) : isRunning(pid);
+    return run.pid === process.pid ? held.has(path.resolve(file)) : isRunning(run.pid);
 }
 
 /** Whether the process `pid` exists. */
@@ -704,7 +674,7 @@ async function generate(
     const root = findProjectRoot();
     const settings = loadSettingsOrFail(settingFlags(options));
     const paths = outputPaths(input, root, settings.scriptsDir);
-    const source = path.relative(root, input).split(path.sep).join(path.posix.sep);
+    const source = toPosix(path.relative(root, input));
     // Held until both outputs are written, so that no run of another input with
     // the same name passes the check below and writes them in the meantime.
     await using reservation = await reserveOutputs(paths, source).catch(

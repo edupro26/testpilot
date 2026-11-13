@@ -33,7 +33,12 @@ export class MockProvider implements LLMProvider {
         this.turns = turns;
     }
 
-    /** Return the configured canned response. */
+    /**
+     * Return the configured canned response.
+     *
+     * @param request - The prompt pair, passed to a computed response.
+     * @returns The fixed response, or what the function returns for the prompts.
+     */
     complete({ systemPrompt, userPrompt }: CompletionRequest): Promise<string> {
         return Promise.resolve(
             typeof this.response === 'function'
@@ -42,7 +47,12 @@ export class MockProvider implements LLMProvider {
         );
     }
 
-    /** Return a conversation replaying this provider's scripted turns. */
+    /**
+     * Return a conversation replaying this provider's scripted turns.
+     *
+     * @param request - The opening prompts and tools, recorded on the conversation.
+     * @returns The new conversation, also appended to `conversations`.
+     */
     startConversation(request: ConversationRequest): MockConversation {
         const conversation = new MockConversation(this.turns, request);
         this.conversations.push(conversation);
@@ -74,6 +84,7 @@ export class MockConversation implements Conversation {
     /**
      * Record `results` and return the next scripted turn.
      *
+     * @param results - The tool results to record; none on the opening turn.
      * @returns The next scripted turn, or an empty turn once they run out --
      *   which ends an agent loop rather than hanging it.
      */

@@ -60,7 +60,7 @@ Every other setting keeps its default until it is set, and the Azure block comes
     tests/                      # the validated JSON test case of each run
 ```
 
-Without a string-literal `testDir` in the Playwright config, `scriptsDir` falls back to `testpilot` (Playwright's default `testDir` is the config's own folder), with a warning when `testDir` is set some other way.
+`init` asks the project's Playwright for the resolved `testDir` of each project (`playwright test --list --reporter=json` on a spec that does not exist, so no spec is loaded). When the projects use different folders, `scriptsDir` goes inside the config's own `testDir`; when Playwright cannot load the config, it falls back to `testpilot`. Both print a warning.
 
 Re-running `init` is safe: it never overwrites an existing file, and only adds `scriptsDir` to a `config.json` that lacks it; a `config.json` that is not a valid JSON object is left untouched for the developer to fix. That is also how `init --skills` adds or updates the skill in a project already set up; the skill folder is the one exception to never overwriting: `init --skills` replaces it whole, hand edits included.
 

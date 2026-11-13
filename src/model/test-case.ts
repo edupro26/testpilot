@@ -67,7 +67,12 @@ export interface PlacedStatement {
     statement: StepStatement;
 }
 
-/** A not yet judged statement; an awaited `expect(...)` is an assertion. */
+/**
+ * A not yet judged statement; an awaited `expect(...)` is an assertion.
+ *
+ * @param code - The Playwright statement.
+ * @returns The statement, typed as an assertion or an action, with no reason.
+ */
 export function statement(code: string): StepStatement {
     const type = code.trimStart().startsWith('await expect(') ? 'assertion' : 'action';
     return { code, reason: '', type };
@@ -76,6 +81,10 @@ export function statement(code: string): StepStatement {
 /**
  * A test case's statements in run order, each with its step; only those of
  * the steps before `before`, when given.
+ *
+ * @param testCase - The test case to read.
+ * @param before - The step to stop at, itself excluded; all steps if omitted.
+ * @returns Each statement with the module and step indexes it belongs to.
  */
 export function placeStatements(
     testCase: TestCase,

@@ -1,11 +1,14 @@
 /** `testpilot init`: set a project up for testpilot. */
 
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
-import ts from 'typescript';
+import { z } from 'zod';
 
 import {
     CONFIG_DIR,
@@ -13,6 +16,7 @@ import {
     type ConfigFile,
     findProjectRoot,
     readConfigObject,
+    toPosix,
 } from '../config.ts';
 import { ConfigurationError, errorMessage } from '../runtime/exceptions.ts';
 import { type Check, findPlaywrightConfig, formatChecks, runChecks } from './doctor.ts';
@@ -22,205 +26,97 @@ import { installSkill, shownSkillPath, type SkillAgent, skillDir } from './skill
 /** The check `init` does not stop on: the LLM is configured after `init`. */
 const LLM_CHECK = 'LLM settings';
 
+const execFileAsync = promisify(execFile);
+
 const GITIGNORE_FILE = path.join(CONFIG_DIR, '.gitignore');
 
 /** What testpilot writes as it runs; never committed. */
 const GITIGNORE = ['logs/', 'tests/', '.playwright-mcp/'].join('\n') + '\n';
 
-/** A `testDir` as written: its literal, `null` if set some other way, else unset. */
-type TestDir = string | null | undefined;
+/** A spec file name no project has, so that listing it loads no spec. */
+const NO_SPEC = '__testpilot_no_spec__';
 
-/**
- * Where a Playwright config's text sets its test folders.
- *
- * A folder set other than by one string literal (`path.join(__dirname, 'e2e')`,
- * `'./e2e' + '/smoke'`, a template with `${`) is `null`.
- */
+/** How long Playwright may take to load the config. */
+const LIST_TIMEOUT_MS = 30_000;
+
+/** The part of Playwright's JSON report that says where the specs are. */
+const ReportSchema = z.object({
+    config: z.object({
+        rootDir: z.string(),
+        projects: z.array(z.object({ testDir: z.string() })),
+    }),
+});
+
+/** Where a Playwright config runs specs from, as Playwright resolves it. */
 export interface TestDirs {
-    /** The config's own `testDir`, which projects without one use. */
-    testDir: TestDir;
-    /** Each project's `testDir`, in order; `null` for a project not written out. */
-    projects: TestDir[];
+    /** The config's own `testDir`, absolute; the config's folder if it sets none. */
+    rootDir: string;
+    /** Each project's `testDir`, absolute, in order. */
+    projects: string[];
 }
 
 /**
- * Read the test folders from a Playwright config's text.
+ * Ask the project's Playwright where its config runs specs from.
  *
- * The config is the object exported by default or as `module.exports`, either
- * directly, through `defineConfig` (its only argument), under whatever name the
- * file imports it as, or through a variable declared in the file. Comments are
- * ignored.
+ * Playwright loads the config as `playwright test` would, then lists a spec
+ * that does not exist, so that no spec is loaded. Its report goes to a file of
+ * its own, as the config may print to stdout.
  *
- * @param configText - The config file's source.
- * @returns The folders; a `testDir` of `null` if the config object cannot be
- *   found, as nothing can then be said of where its specs are.
+ * @param cwd - The project root, where `@playwright/test` is installed.
+ * @param configFile - The Playwright config.
+ * @returns The folders.
+ * @throws {Error} If Playwright is not installed or cannot load the config.
  */
-export function readTestDirs(configText: string): TestDirs {
-    const source = ts.createSourceFile(
-        'playwright.config.ts',
-        configText,
-        ts.ScriptTarget.Latest,
-        true,
-    );
-    const config = configObject(source);
-    if (config === undefined) {
-        return { testDir: null, projects: [] };
+export async function readTestDirs(cwd: string, configFile: string): Promise<TestDirs> {
+    let cli: string;
+    try {
+        cli = createRequire(path.join(cwd, 'package.json')).resolve(
+            '@playwright/test/cli',
+        );
+    } catch (error) {
+        throw new Error('@playwright/test is not installed in this project', {
+            cause: error,
+        });
     }
-    const projects = propertyValue(config, 'projects');
-    return {
-        testDir: literal(propertyValue(config, 'testDir')),
-        projects:
-            projects === undefined
-                ? []
-                : ts.isArrayLiteralExpression(projects)
-                  ? projects.elements.map((project) =>
-                        ts.isObjectLiteralExpression(project)
-                            ? literal(propertyValue(project, 'testDir'))
-                            : null,
-                    )
-                  : [null],
+    const folder = await mkdtemp(path.join(tmpdir(), 'testpilot-'));
+    const report = path.join(folder, 'report.json');
+    // The user's own report settings would send it elsewhere.
+    const env = {
+        ...Object.fromEntries(
+            Object.entries(process.env).filter(
+                ([name]) => !name.startsWith('PLAYWRIGHT_JSON_OUTPUT_'),
+            ),
+        ),
+        PLAYWRIGHT_JSON_OUTPUT_NAME: report,
     };
-}
-
-/** The config object a Playwright config file exports, if it can be found. */
-function configObject(source: ts.SourceFile): ts.ObjectLiteralExpression | undefined {
-    for (const node of source.statements) {
-        if (ts.isExportAssignment(node)) {
-            return objectOf(node.expression, source);
-        }
-        if (
-            ts.isExpressionStatement(node) &&
-            ts.isBinaryExpression(node.expression) &&
-            node.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-            node.expression.left.getText() === 'module.exports'
-        ) {
-            return objectOf(node.expression.right, source);
-        }
+    try {
+        await execFileAsync(
+            process.execPath,
+            [
+                cli,
+                'test',
+                NO_SPEC,
+                `--config=${configFile}`,
+                '--list',
+                '--pass-with-no-tests',
+                '--reporter=json',
+            ],
+            { cwd, env, timeout: LIST_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
+        );
+        const { config } = ReportSchema.parse(
+            JSON.parse(await readFile(report, 'utf8')),
+        );
+        return {
+            rootDir: config.rootDir,
+            projects: config.projects.map((project) => project.testDir),
+        };
+    } catch (error) {
+        const stderr = (error as { stderr?: string }).stderr ?? '';
+        const reason = stderr.split('\n').find((line) => line.trim() !== '');
+        throw new Error(reason?.trim() ?? errorMessage(error), { cause: error });
+    } finally {
+        await rm(folder, { recursive: true, force: true });
     }
-    return undefined;
-}
-
-/**
- * The object literal an expression stands for: itself, the only argument of
- * `defineConfig`, or the value of a variable declared at the top of `source`.
- * `defineConfig` given several configs merges them, so none of them alone is
- * the config.
- */
-function objectOf(
-    expression: ts.Expression,
-    source: ts.SourceFile,
-): ts.ObjectLiteralExpression | undefined {
-    while (
-        ts.isParenthesizedExpression(expression) ||
-        ts.isSatisfiesExpression(expression) ||
-        ts.isAsExpression(expression)
-    ) {
-        expression = expression.expression;
-    }
-    if (ts.isObjectLiteralExpression(expression)) {
-        return expression;
-    }
-    if (
-        ts.isCallExpression(expression) &&
-        isDefineConfig(expression.expression, source)
-    ) {
-        const [only, ...others] = expression.arguments;
-        return only === undefined || others.length > 0
-            ? undefined
-            : objectOf(only, source);
-    }
-    if (ts.isIdentifier(expression)) {
-        const declaration = source.statements
-            .filter(ts.isVariableStatement)
-            .flatMap((statement) => statement.declarationList.declarations)
-            .find((d) => ts.isIdentifier(d.name) && d.name.text === expression.text);
-        return declaration?.initializer === undefined
-            ? undefined
-            : objectOf(declaration.initializer, source);
-    }
-    return undefined;
-}
-
-/**
- * Whether `callee` is Playwright's `defineConfig`: by that name, as a property
- * (`test.defineConfig`), or by the name the file imports or requires it as
- * (`import { defineConfig as config }`, `const { defineConfig: config } =
- * require(...)`).
- */
-function isDefineConfig(callee: ts.Expression, source: ts.SourceFile): boolean {
-    if (ts.isPropertyAccessExpression(callee)) {
-        return callee.name.text === 'defineConfig';
-    }
-    if (!ts.isIdentifier(callee)) {
-        return false;
-    }
-    if (callee.text === 'defineConfig') {
-        return true;
-    }
-    for (const statement of source.statements) {
-        const bindings = ts.isImportDeclaration(statement)
-            ? statement.importClause?.namedBindings
-            : undefined;
-        if (
-            bindings !== undefined &&
-            ts.isNamedImports(bindings) &&
-            bindings.elements.some(
-                (element) =>
-                    element.name.text === callee.text &&
-                    element.propertyName?.getText() === 'defineConfig',
-            )
-        ) {
-            return true;
-        }
-        if (
-            ts.isVariableStatement(statement) &&
-            statement.declarationList.declarations.some(
-                (declaration) =>
-                    ts.isObjectBindingPattern(declaration.name) &&
-                    declaration.name.elements.some(
-                        (element) =>
-                            ts.isIdentifier(element.name) &&
-                            element.name.text === callee.text &&
-                            element.propertyName?.getText() === 'defineConfig',
-                    ),
-            )
-        ) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * What an object literal sets `name` to: the last value given, as at run time,
- * or the property itself when it is shorthand (`{ testDir }`) or spread over.
- */
-function propertyValue(
-    object: ts.ObjectLiteralExpression,
-    name: string,
-): ts.Node | undefined {
-    let value: ts.Node | undefined;
-    for (const property of object.properties) {
-        if (ts.isSpreadAssignment(property)) {
-            value = property;
-        } else if (
-            (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
-            property.name.text === name
-        ) {
-            value = ts.isPropertyAssignment(property) ? property.initializer : property;
-        }
-    }
-    return value;
-}
-
-/** A value as a `TestDir`: the text of a plain string literal, else `null`. */
-function literal(value: ts.Node | undefined): TestDir {
-    if (value === undefined) {
-        return undefined;
-    }
-    return ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)
-        ? value.text
-        : null;
 }
 
 /**
@@ -239,7 +135,8 @@ function literal(value: ts.Node | undefined): TestDir {
  *
  * @param options - The project root and the checks to run (the working
  *   directory and the doctor checks by default), the agent to install the skill
- *   for, whether that copy is the user's, and the home folder (the user's by
+ *   for, whether that copy is the user's, the home folder (the user's by
+ *   default), and how to read the config's test folders (`readTestDirs` by
  *   default).
  * @throws {CliExit} With status 2, before writing `.testpilot/`, if a check
  *   other than the LLM settings failed, or the skill cannot be installed.
@@ -251,6 +148,7 @@ export async function initCommand(
         skills?: SkillAgent;
         global?: boolean;
         home?: string;
+        testDirs?: typeof readTestDirs;
     } = {},
 ): Promise<void> {
     const {
@@ -259,6 +157,7 @@ export async function initCommand(
         skills,
         global = false,
         home = homedir(),
+        testDirs = readTestDirs,
     } = options;
     if (global && skills !== undefined) {
         print(await installSkillLine({ agent: skills, global }, { cwd, home }));
@@ -278,7 +177,7 @@ export async function initCommand(
         throw new CliExit(2);
     }
 
-    const scriptsDir = await scriptsDirFor(cwd);
+    const scriptsDir = await scriptsDirFor(cwd, testDirs);
     await mkdir(path.join(cwd, CONFIG_DIR), { recursive: true });
     lines.push(
         ...[await writeGitignore(cwd), await writeConfig(cwd, scriptsDir)].filter(
@@ -322,39 +221,37 @@ function printAfterChecks(lines: string[]): void {
 
 /**
  * Where generated scripts go: a `testpilot/` folder in the folder every
- * Playwright project runs specs from.
+ * Playwright project runs specs from, relative to the project root.
  *
- * When the projects use different folders, or one cannot be read, the scripts
- * go to the config's own `testDir`, and the user is told to check it.
+ * When the projects use different folders, the scripts go to the config's own
+ * `testDir`; when Playwright cannot read the config, to `testpilot/`. Either
+ * way the user is told to check it.
  */
-async function scriptsDirFor(cwd: string): Promise<string> {
+async function scriptsDirFor(
+    cwd: string,
+    testDirs: typeof readTestDirs,
+): Promise<string> {
     const configFile = findPlaywrightConfig(cwd);
-    const dirs: TestDirs =
-        configFile === undefined
-            ? { testDir: undefined, projects: [] }
-            : readTestDirs(await readFile(configFile, 'utf8'));
-    // Playwright's default testDir is the config's own folder.
-    const fallback = path.posix.join(toPosix(dirs.testDir ?? '.'), 'testpilot');
-    const inherited = dirs.testDir === undefined ? '.' : dirs.testDir;
-    const folders =
-        dirs.projects.length === 0
-            ? [inherited]
-            : dirs.projects.map((dir) => (dir === undefined ? inherited : dir));
-    const readable = folders.filter((dir) => dir !== null);
-    const shown = path.basename(configFile ?? '');
-    if (readable.length < folders.length) {
+    if (configFile === undefined) {
+        return 'testpilot';
+    }
+    const shown = path.basename(configFile);
+    let dirs: TestDirs;
+    try {
+        dirs = await testDirs(cwd, configFile);
+    } catch (error) {
         print(
-            `! Could not read testDir from ${shown}; ` +
+            `! Could not read testDir from ${shown}: ${errorMessage(error)}; ` +
                 `check scriptsDir in ${toPosix(CONFIG_FILE)}`,
         );
-        return fallback;
+        return 'testpilot';
     }
-    const distinct = [
-        ...new Set(readable.map((dir) => path.posix.normalize(toPosix(dir)))),
-    ];
+    const relative = (dir: string): string => toPosix(path.relative(cwd, dir)) || '.';
+    const fallback = path.posix.join(relative(dirs.rootDir), 'testpilot');
+    const distinct = [...new Set(dirs.projects.map(relative))];
     const [only, ...others] = distinct;
-    if (only !== undefined && others.length === 0) {
-        return path.posix.join(only, 'testpilot');
+    if (others.length === 0) {
+        return only === undefined ? fallback : path.posix.join(only, 'testpilot');
     }
     print(
         `! The projects in ${shown} use different test folders ` +
@@ -410,10 +307,6 @@ async function writeConfig(
         'utf8',
     );
     return `${status} ${toPosix(CONFIG_FILE)}`;
-}
-
-function toPosix(file: string): string {
-    return file.split(path.sep).join(path.posix.sep);
 }
 
 function print(line: string): void {

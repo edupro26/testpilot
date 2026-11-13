@@ -10,7 +10,7 @@
 import type { Page } from '@playwright/test';
 import { z } from 'zod';
 
-import type { LLMProvider } from '../llm/protocol.ts';
+import { completeJson, type LLMProvider } from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
 import {
     placeStatements,
@@ -18,11 +18,9 @@ import {
     type TestCase,
 } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
-import { errorMessage, ValidatorError } from '../runtime/exceptions.ts';
+import { ValidatorError } from '../runtime/exceptions.ts';
 import { BrowserError, type ReplayBrowser } from './browser.ts';
 import { failureAt, numbered, type StepFailure, withTimeouts } from './utils.ts';
-
-const SYSTEM_PROMPT = 'You are an expert QA automation engineer.';
 
 /** A replay's outcome; `testCase` carries the timeouts measured so far. */
 export type Validation =
@@ -96,6 +94,10 @@ export class Validator {
      * An assertion that needed longer than Playwright's default gets twice
      * its measured wait as timeout, keeping any larger one from an earlier
      * round. The first failure ends the round.
+     *
+     * @param testCase - The test case whose statements to replay, in run order.
+     * @returns The test case with the measured timeouts and, if every statement
+     *   passed, the run time in ms; otherwise the failed statement and its step.
      */
     async validate(testCase: TestCase): Promise<Validation> {
         const placed = placeStatements(testCase);
@@ -154,35 +156,14 @@ export class Validator {
             page_url: page.url(),
             page_title: await page.title(),
         });
-        const response = await this.llm.complete({
-            systemPrompt: SYSTEM_PROMPT,
-            userPrompt: prompt,
-            jsonMode: true,
+        const semantic = await completeJson(this.llm, prompt, {
+            schema: SemanticVerdictSchema,
+            shape: 'the verdict shape',
+            error: ValidatorError,
         });
-        logger.debug(`Raw LLM response (${response.length} chars): ${response}`);
 
-        let data: unknown;
-        try {
-            data = JSON.parse(response);
-        } catch (error) {
-            throw new ValidatorError(
-                `LLM response was not valid JSON: ${errorMessage(error)}`,
-                { code: 'LLM_RESPONSE_INVALID', cause: error },
-            );
-        }
-
-        const parsed = SemanticVerdictSchema.safeParse(data);
-        if (!parsed.success) {
-            throw new ValidatorError(
-                `LLM response did not match the verdict shape: ${z.prettifyError(parsed.error)}`,
-                { code: 'LLM_RESPONSE_INVALID' },
-            );
-        }
-        const semantic = parsed.data;
-
-        logger.info(
-            `Semantic check: ${semantic.is_valid ? 'passed' : `failed (${semantic.reason})`}`,
-        );
+        const outcome = semantic.is_valid ? 'passed' : `failed (${semantic.reason})`;
+        logger.info(`Semantic check: ${outcome}`);
         if (!semantic.is_valid) {
             return new StepVerdict({ isValid: false, reason: semantic.reason });
         }

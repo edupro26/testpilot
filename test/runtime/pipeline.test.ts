@@ -126,7 +126,7 @@ describe('extractAndValidate', () => {
         expect(fake.extractor.runStep.mock.calls[1]?.[2].history).toEqual([GOTO]);
     });
 
-    test('a rejected or failing step alone is re-extracted, from the restored state', async () => {
+    test('a rejected or failing step alone is redone from restored state', async () => {
         // A step the judge still rejects once the agent's repairs run out, and
         // one whose code fails the replay, go through the same re-extraction:
         // the agent's browser is brought to just before the step by running

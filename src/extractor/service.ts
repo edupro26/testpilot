@@ -56,7 +56,8 @@ export class Extractor {
             throw new RangeError(`Module ${module.url} has no step ${index}`);
         }
         logger.info(
-            `Extracting step ${index + 1}/${module.execution_steps.length} of ${module.url}`,
+            `Extracting step ${index + 1}/${module.execution_steps.length} of ` +
+                module.url,
         );
         return this.agent.run(step.step, {
             context: describeBrowserContext(module, history),

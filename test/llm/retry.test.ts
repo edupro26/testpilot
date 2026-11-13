@@ -73,7 +73,7 @@ test('gives up on other errors at once, and on rate limits eventually', async ()
     expect(sleep).toHaveBeenCalledTimes(1);
 });
 
-test("waits as long as the rate limit's Retry-After asks, when that is longer", async () => {
+test("waits as long as a rate limit's Retry-After asks, if longer", async () => {
     // Azure says when its quota frees up; retrying sooner only fails again.
     const limited = (retryAfter: string): Error =>
         Object.assign(new Error('rate limited'), {

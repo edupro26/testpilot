@@ -105,7 +105,7 @@ test('a call to a tool it was not given goes back to the agent', async () => {
     expect(reply?.content).toContain('browser_close');
 });
 
-test('a rejected report goes back to the agent, until its repairs run out', async () => {
+test('a rejected report goes back to the agent until its repairs run out', async () => {
     // The agent fixes the step on its still-live page, in the same
     // conversation. Past its repairs, the step is handed back rejected, to be
     // re-extracted from a restored browser instead.
@@ -214,7 +214,9 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
         {
             id: 'widened-truncated-locator',
             tool: 'browser_verify_text_visible',
-            ran: "await expect(page.getByText('Your email or password is')).toBeVisible();",
+            ran:
+                "await expect(page.getByText('Your email or password is'))" +
+                '.toBeVisible();',
             reported:
                 "await expect(page.getByText('Your email or password is incorrect!'))" +
                 '.toBeVisible();',
@@ -246,7 +248,7 @@ describe('rejects a statement not emitted verbatim by a collectable tool', () =>
         expect(repairs).toHaveLength(2);
     });
 
-    test('a statement that does not parse is our bug, and ends the run at once', async () => {
+    test('an unparsable statement is our bug and ends the run at once', async () => {
         const ran = 'await page.evaluate(() => {';
         const mcp = new FakeMCP({ browser_click: new McpResult(false, emitted(ran)) });
         const llm = new MockProvider('', [toolTurn('browser_click', {}), done(ran)]);

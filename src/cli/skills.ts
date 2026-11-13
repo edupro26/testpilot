@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { cp, readdir, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
+import { toPosix } from '../config.ts';
 import { errorMessage } from '../runtime/exceptions.ts';
 import type { Check } from './doctor.ts';
 
@@ -221,9 +222,4 @@ async function skillFiles(folder: string): Promise<string[]> {
             toPosix(path.relative(folder, path.join(entry.parentPath, entry.name))),
         )
         .sort();
-}
-
-/** A path with `/` separators, as shown to the user. */
-function toPosix(file: string): string {
-    return file.split(path.sep).join('/');
 }

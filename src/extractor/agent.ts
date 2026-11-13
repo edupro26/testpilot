@@ -9,7 +9,12 @@
 
 import { z } from 'zod';
 
-import type { LLMProvider, ToolDefinition, ToolResult } from '../llm/protocol.ts';
+import {
+    type LLMProvider,
+    SYSTEM_PROMPT,
+    type ToolDefinition,
+    type ToolResult,
+} from '../llm/protocol.ts';
 import { logger } from '../logger.ts';
 import { statement, type StepStatement } from '../model/test-case.ts';
 import { renderPrompt } from '../prompt-loader.ts';
@@ -17,8 +22,6 @@ import { ExtractorError } from '../runtime/exceptions.ts';
 import { COLLECTABLE_TOOLS } from './mcp/constants.ts';
 import type { McpConnection } from './mcp/server.ts';
 import { requireStatement } from './utils.ts';
-
-const SYSTEM_PROMPT = 'You are an expert QA automation engineer.';
 const STEP_DONE = 'step_done';
 
 // Caps each tool result sent back to the model (a full snapshot is ~10k tokens).
@@ -183,7 +186,8 @@ export class StepAgent {
                     }
                     repairs++;
                     logger.info(
-                        `Step rejected, the agent repairs it (${repairs}/${MAX_REPAIRS})`,
+                        'Step rejected, the agent repairs it ' +
+                            `(${repairs}/${MAX_REPAIRS})`,
                     );
                     results.push({
                         id: call.id,
@@ -226,7 +230,8 @@ export class StepAgent {
         }
 
         throw new ExtractorError(
-            `Step ${JSON.stringify(step)} did not complete within ${this.maxTurns} turns`,
+            `Step ${JSON.stringify(step)} did not complete within ` +
+                `${this.maxTurns} turns`,
             { code: 'STEP_OUT_OF_TURNS' },
         );
     }

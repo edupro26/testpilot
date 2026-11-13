@@ -181,7 +181,7 @@ describe('PlaywrightMCP', () => {
         expect(closed).toBe(1);
     });
 
-    test("runs statements on the session's newest page, a new session's after a reset", async () => {
+    test("uses the newest page, a new session's after a reset", async () => {
         // The pipeline restores the agent's browser by running accepted code on
         // the page the agent works on: the newest (a link may open a tab), and
         // after a reset that of a fresh server.
@@ -205,7 +205,7 @@ describe('PlaywrightMCP', () => {
         await expect(plain.run([goto])).rejects.toThrow(McpError);
     });
 
-    test('the real Playwright MCP offers every allowlisted tool, on the pipeline page', async () => {
+    test('the real MCP offers each allowlisted tool on the pipeline page', async () => {
         // Offline, on a data: page. What the pipeline runs on the page must be
         // what the agent then sees: Playwright MCP adopts the page as its tab.
         await using mcp = await PlaywrightMCP.connect(playwrightServer('en-US'));

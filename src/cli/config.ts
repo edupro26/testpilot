@@ -15,6 +15,7 @@ import {
     SETTINGS,
     type SettingSource,
     type SettingVariable,
+    toPosix,
 } from '../config.ts';
 import { logger } from '../logger.ts';
 import { ConfigurationError, errorMessage } from '../runtime/exceptions.ts';
@@ -646,7 +647,7 @@ function endOfEscape(chars: string[], start: number): number {
 
 /** `file` as shown to the developer: relative to `cwd`, with `/` separators. */
 function display(cwd: string, file: string): string {
-    return path.relative(cwd, file).split(path.sep).join(path.posix.sep);
+    return toPosix(path.relative(cwd, file));
 }
 
 function print(line: string): void {

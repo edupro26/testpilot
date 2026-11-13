@@ -206,7 +206,11 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
         return new PlaywrightMCP(createServer, session, tools);
     }
 
-    /** Return the allowlisted tools, resolved at connection time. */
+    /**
+     * Return the allowlisted tools, resolved at connection time.
+     *
+     * @returns The tools, in allowlist order.
+     */
     listTools(): McpTool[] {
         return this.tools;
     }
@@ -289,6 +293,8 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
      * The agent's page: the tab Playwright MCP has selected, opened if there
      * is none. A popup is a newer page, but not the agent's until it selects it.
      *
+     * @returns The selected tab's page; the newest page, or a new one, if no tab
+     *   is marked selected.
      * @throws {McpError} If the session's server exposes no browser context.
      */
     async page(): Promise<Page> {
@@ -317,6 +323,7 @@ export class PlaywrightMCP implements McpConnection, AsyncDisposable {
      * Run accepted statements on the agent's page, as the replay does, to
      * restore the state a step starts from.
      *
+     * @param statements - The statements to run, in order.
      * @returns How long each statement took, in ms.
      * @throws {BrowserError} If a statement fails on the page.
      */
@@ -413,8 +420,9 @@ async function resolveTools(client: Client): Promise<McpTool[]> {
     if (missing.length > 0) {
         throw new McpError(
             `Playwright MCP is missing expected tool(s): ${missing.join(', ')}. ` +
-                `Was the installed @playwright/mcp upgraded, or the testing capability ` +
-                `dropped from its config? It offered: ${[...offered.keys()].sort().join(', ')}`,
+                'Was the installed @playwright/mcp upgraded, or the testing ' +
+                'capability dropped from its config? It offered: ' +
+                [...offered.keys()].sort().join(', '),
             { code: 'BROWSER_AGENT_FAILED' },
         );
     }

@@ -57,6 +57,10 @@ export class BrowserError extends Error {
  * Execute `statements` against `page`, in order, each action and assertion
  * waiting up to `timeoutMs`.
  *
+ * @param page - The page to run them on.
+ * @param statements - The statements to run.
+ * @param timeoutMs - How long any action or assertion may wait, in ms; it also
+ *   becomes the page's default timeout.
  * @returns How long each statement took, in ms.
  * @throws {BrowserError} If a statement fails on the page. Errors in the code
  *   itself (a syntax error, a name not in scope) propagate as they are.
@@ -148,7 +152,14 @@ export class ValidationBrowser implements ReplayBrowser, AsyncDisposable {
         this.page = page;
     }
 
-    /** Launch the validation browser, on a blank page. */
+    /**
+     * Launch the validation browser, on a blank page.
+     *
+     * @param options - Whether to run headless, the context locale, and how long
+     *   any action or assertion may wait; headless, `en-US` and 30s if left out.
+     * @returns The browser, ready to run statements.
+     * @throws {BrowserLaunchError} If Chromium cannot be launched.
+     */
     static async launch({
         headless = true,
         locale = 'en-US',
@@ -169,6 +180,7 @@ export class ValidationBrowser implements ReplayBrowser, AsyncDisposable {
     /**
      * Execute `statements` against the live page, in order.
      *
+     * @param statements - The statements to run.
      * @returns How long each statement took, in ms.
      * @throws {BrowserError} If a statement fails on the page.
      */

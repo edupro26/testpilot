@@ -1,4 +1,4 @@
-/** Helpers for the Extractor: compiling statements, prompt context, collection checks. */
+/** Extractor helpers: compiling statements, prompt context, collection checks. */
 
 import type { Module } from '../model/test-case.ts';
 import { ExtractorError } from '../runtime/exceptions.ts';

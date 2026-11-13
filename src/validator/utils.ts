@@ -59,6 +59,12 @@ export function failureAt(
 /**
  * Give each assertion the larger of its timeout and the one its measured
  * wait calls for; statements past `durations` (after a failure) keep theirs.
+ *
+ * @param testCase - The test case that was replayed.
+ * @param durations - How long each statement took, in ms, in run order.
+ * @returns A copy of `testCase`; an assertion's measured wait sets a timeout
+ *   only when, with its margin and rounded up to whole seconds, it exceeds
+ *   Playwright's default.
  */
 export function withTimeouts(testCase: TestCase, durations: number[]): TestCase {
     let index = 0;
@@ -86,14 +92,26 @@ export function withTimeouts(testCase: TestCase, durations: number[]): TestCase 
     };
 }
 
-/** Render `statements` as a numbered list, one line per statement. */
+/**
+ * Render `statements` as a numbered list, one line per statement.
+ *
+ * @param statements - The statements to list.
+ * @returns Each statement's code after its 1-based number, as `1. <code>`.
+ */
 export function numbered(statements: StepStatement[]): string {
     return statements
         .map((statement, index) => `${index + 1}. ${statement.code}`)
         .join('\n');
 }
 
-/** Trim a Playwright error, which can carry a very long call log. */
+/**
+ * Trim a Playwright error, which can carry a very long call log.
+ *
+ * @param message - The error's message.
+ * @param limit - The most characters to keep.
+ * @returns The message without surrounding whitespace, cut to `limit` and
+ *   marked `... (truncated)` if it was longer.
+ */
 export function trim(message: string, limit = 1200): string {
     const trimmed = message.trim();
     return trimmed.length <= limit
