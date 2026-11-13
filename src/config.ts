@@ -20,6 +20,13 @@ export const LLM_PROVIDER_NAMES = ['azure_openai'] as const;
 /** One of `LLM_PROVIDER_NAMES`. */
 export type LLMProviderName = (typeof LLM_PROVIDER_NAMES)[number];
 
+/** The version in testpilot's own `package.json`. */
+export const VERSION = (
+    JSON.parse(
+        readFileSync(path.resolve(import.meta.dirname, '..', 'package.json'), 'utf8'),
+    ) as { version: string }
+).version;
+
 /** The project folder testpilot keeps its files in. */
 export const CONFIG_DIR = '.testpilot';
 

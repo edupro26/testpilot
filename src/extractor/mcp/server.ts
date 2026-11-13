@@ -13,7 +13,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createConnection } from '@playwright/mcp';
 import type { BrowserContext, Page } from '@playwright/test';
 
-import { CONFIG_DIR, findProjectRoot } from '../../config.ts';
+import { CONFIG_DIR, findProjectRoot, VERSION } from '../../config.ts';
 import { logger } from '../../logger.ts';
 import type { StepStatement } from '../../model/test-case.ts';
 import { errorMessage, McpError } from '../../runtime/exceptions.ts';
@@ -364,7 +364,7 @@ async function openSession(createServer: ServerFactory): Promise<Session> {
         const server = await createServer();
         const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
         session = {
-            client: new Client({ name: 'testpilot', version: '0.1.0' }),
+            client: new Client({ name: 'testpilot', version: VERSION }),
             server,
         };
         await server.connect(serverTransport);

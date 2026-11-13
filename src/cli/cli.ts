@@ -1,10 +1,8 @@
 /** The `testpilot` command: parses arguments and dispatches to a command. */
 
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-
 import { Command, CommanderError } from 'commander';
 
+import { VERSION } from '../config.ts';
 import { ERROR_CODES } from '../error-codes.ts';
 import { logger } from '../logger.ts';
 import { errorMessage } from '../runtime/exceptions.ts';
@@ -19,16 +17,6 @@ import { CliExit } from './errors.ts';
 import { generateCommand } from './generate.ts';
 import { initCommand } from './init.ts';
 import { SKILL_AGENTS, type SkillAgent } from './skills.ts';
-
-/** The version in testpilot's own `package.json`. */
-const VERSION = (
-    JSON.parse(
-        readFileSync(
-            path.resolve(import.meta.dirname, '..', '..', 'package.json'),
-            'utf8',
-        ),
-    ) as { version: string }
-).version;
 
 /**
  * The commander program, with every command registered.

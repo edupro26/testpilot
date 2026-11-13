@@ -1,6 +1,6 @@
 {
     "name": "testpilot",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "TestPilot is a GenAI enabler for quick test script generation and automation",
     "private": true,
     "type": "module",
